@@ -1,0 +1,251 @@
+---
+title: "Modelling gridMET climate for CAN PIAL WPBR transects from Daymet data"
+author: "Stephen Huysman"
+date: "`r Sys.Date()`"
+bibliography: /home/steve/OneDrive/org/library.bib
+output: 
+  html_document:
+    code_folding: show
+---
+
+```{css, echo=FALSE}
+body .main-container {
+    max-width: 1080px !important;
+    width: 1080px !important;
+}
+body {
+    max-width: 1080px !important;
+}
+```
+
+# Introduction
+@jamisonClimaticVulnerabilityWhitebarkInPreparation developed a range-wide model of probability of White Pine Blister Rust infection in whitebark pine based on August-September Relative Humidity and Temperature. This model was developed using Daymet historical climate data @thorntonDaymetDailySurface2014. We wish to develop an analog of this model based on historical gridMET historical climate data [@abatzoglouDevelopmentGriddedSurface2013], so that it can be used with cliamte projections based on gridMET and MACA [@abatzoglouComparisonStatisticalDownscaling2012] such as those developed by @tercekHistoricalChangesPlant2021.
+
+The dataset analyzed by @jamisonClimaticVulnerabilityWhitebarkInPreparation contains transects located in parks in Canada, which are covered by Daymet historical climate data but not by gridMET.  Here, we attempt to see if Daymet climate data can reasonably be modeled from gridMET data.  The approach is to fit a linear regression to Daymet temperature data with gridMET temperature data as the response variable.  We select Glacier NP transects to use to develop the model as they are the nearest transects to the Canadian Park transects and thus assumed to be most climatically similar.
+
+# Setup
+
+```{r setup}
+library(daymetr)
+library(here)
+library(lubridate)
+library(tidyverse)
+library(modelr)
+
+## Transect location data provided by EJ
+parks <- read_csv("SITE_LOCATIONS.csv")
+
+## All Canadian transects
+trans_can <- parks %>% filter(park == "CAN")
+
+## All Glacier NP transects
+trans_glac <- parks %>% filter(park == "GLAC")
+##trans_glac <- parks %>% filter(park != "CAN")
+
+gridmet_dir <- file.path("out")
+
+## Load gridMET historical data for GLAC transects.  These were downloaded previously using gridmet-historical.R script
+gridmet_glac_files <- file.path(gridmet_dir, paste0(trans_glac$transect_id, ".csv"))
+
+gridmet_glac_data <- do.call(rbind, lapply(gridmet_glac_files, function(x) 
+    transform(read.csv(x), transect_id  = basename(x))))
+head(gridmet_glac_data); tail(gridmet_glac_data)
+
+gridmet_glac_data$transect_id = substr(gridmet_glac_data$transect_id,1,nchar(gridmet_glac_data$transect_id)-4)
+head(gridmet_glac_data); tail(gridmet_glac_data)
+
+gridmet_glac_data$Date = ymd(gridmet_glac_data$Date)
+
+## Daymet data dir.  Used for subsequent routine to download Daymet data or to load in previously downloaded data
+daymet_dir <- file.path("daymet")
+```
+
+## Download Daymet data
+
+```{r download-daymet, eval = F}
+## Generate properly formatted csv of locations to run download_daymet_batch
+## Only needs to be ran once
+locations <- rbind(
+    data.frame(site = trans_can$transect_id, lat = trans_can$lat, lon = trans_can$long),
+    data.frame(site = trans_glac$transect_id, lat = trans_glac$lat, lon = trans_glac$long)
+)
+locations_file <- file.path(daymet_dir, "locations.csv")
+write.table(locations, locations_file, sep = ",", col.names = TRUE, row.names = FALSE, quote = FALSE)
+
+download_daymet_batch(
+    file_location = locations_file,
+    start = 1980,
+    end = 2022,
+    internal = FALSE,
+    silent = FALSE,
+    path = daymet_dir
+)
+
+```
+
+## Read Daymet data
+
+``` {r read-daymet}
+daymet_glac_files <- file.path(daymet_dir, paste0(trans_glac$transect_id, "_1980_2022.csv"))
+
+daymet_glac_data <- bind_rows(lapply(daymet_glac_files, function(x) {
+    read_daymet(site = basename(x), x) %>%
+        pivot_wider(names_from = measurement, values_from = value) %>%
+        drop_na("tmax..deg.c.", "tmin..deg.c.", "vp..Pa.") %>%
+        mutate(
+            site = str_split_i(site, pattern = "_1980_2022.csv", i = 1),
+            tavg = (tmax..deg.c. + tmin..deg.c.) / 2,
+            svp = 610.8 * exp((17.27 * tavg / (237.3 + tavg))),
+            rh = vp..Pa. / svp,
+            date = ymd(parse_date_time(paste(year, yday), orders = "yj"))
+        )
+}))
+
+daymet_can_files <- file.path(daymet_dir, paste0(trans_can$transect_id, "_1980_2022.csv"))
+daymet_can_files <- daymet_can_files[file.exists(daymet_can_files)] ## Some transects had NA for lat/lon and were not able to be downloaded from Daymet
+
+daymet_can_data <- bind_rows(lapply(daymet_can_files, function(x) {
+    read_daymet(site = basename(x), x) %>%
+        pivot_wider(names_from = measurement, values_from = value) %>%
+        drop_na("tmax..deg.c.", "tmin..deg.c.", "vp..Pa.") %>%
+        mutate(
+            site = str_split_i(site, pattern = "_1980_2022.csv", i = 1),
+            tavg = (tmax..deg.c. + tmin..deg.c.) / 2,
+            svp = 610.8 * exp((17.27 * tavg / (237.3 + tavg))),
+            rh = vp..Pa. / svp,
+            date = ymd(parse_date_time(paste(year, yday), orders = "yj"))
+        ) })) %>%
+        rename(
+            tavg.daymet = tavg,
+            tmin.daymet = tmin..deg.c.,
+            tmax.daymet = tmax..deg.c.,
+            rh.daymet = rh
+        ) %>%
+        mutate(year = year(date), month = month(date)) %>%
+        select(site, latitude, longitude, date, year, month, tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet) %>%
+        drop_na(tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet)
+
+daymet_can_data$month <- factor(daymet_can_data$month)
+
+## Combine gridMET and Daymet data for GLAC
+all_glac_data <- left_join(daymet_glac_data, gridmet_glac_data, by = c("site" = "transect_id", "date" = "Date")) %>%
+    rename(
+        tmax.daymet = tmax..deg.c.,
+        tmin.daymet = tmin..deg.c.,
+        tavg.daymet = tavg,
+        rh.daymet = rh,
+        tmax.gridmet = Tmax,
+        tmin.gridmet = Tmin,
+        tavg.gridmet = T,
+        rh.gridmet = RH
+    ) %>%
+    mutate(year = year(date), month = month(date)) %>%
+    select(site, latitude, longitude, date, year, month, tmax.daymet, tmin.daymet, tavg.daymet, rh.daymet, tmax.gridmet, tmin.gridmet, tavg.gridmet, rh.gridmet)
+
+all_glac_data$month <- factor(all_glac_data$month)
+```
+# Modeling
+
+```{r models, cache = TRUE}
+par(mfrow = c(2, 2))
+
+lm_min_temp <- lm(tmin.gridmet ~ tmin.daymet, data = all_glac_data)
+summary(lm_min_temp)
+plot(lm_min_temp)
+
+lm_max_temp <- lm(tmax.gridmet ~ tmax.daymet, data = all_glac_data)
+summary(lm_max_temp)
+plot(lm_max_temp)
+
+## lm_avg_temp <- lm(tavg.gridmet ~ tavg.daymet, data = all_glac_data)
+## summary(lm_avg_temp)
+## plot(lm_avg_temp)
+
+lm_min_temp_month <- lm(tmin.gridmet ~ tmin.daymet * month, data = all_glac_data)
+summary(lm_min_temp_month)
+plot(lm_min_temp_month)
+
+lm_max_temp_month <- lm(tmax.gridmet ~ tmax.daymet * month, data = all_glac_data)
+summary(lm_max_temp_month)
+plot(lm_max_temp_month)
+
+## lm_avg_temp_month <- lm(tavg.gridmet ~ tavg.daymet * month, data = all_glac_data)
+## summary(lm_avg_temp_month)
+## plot(lm_avg_temp_month)
+
+lm_min_temp_month_lat <- lm(tmin.gridmet ~ tmin.daymet * month + latitude, data = all_glac_data)
+summary(lm_min_temp_month_lat)
+plot(lm_min_temp_month_lat)
+
+lm_max_temp_month_lat <- lm(tmax.gridmet ~ tmax.daymet * month + latitude, data = all_glac_data)
+summary(lm_max_temp_month_lat)
+plot(lm_max_temp_month_lat)
+
+## lm_avg_temp_month_lat <- lm(tavg.gridmet ~ tavg.daymet * month + latitude, data = all_glac_data)
+## summary(lm_avg_temp_month_lat)
+## plot(lm_avg_temp_month_lat)
+
+anova(lm_min_temp_month, lm_min_temp)
+anova(lm_min_temp_month_lat, lm_min_temp_month)
+
+anova(lm_max_temp_month, lm_max_temp)
+anova(lm_max_temp_month_lat, lm_max_temp_month)
+
+## Models are improved by adding month and lat, from results of ESS F-test
+
+## Add predictions to dataframes
+all_glac_data <- all_glac_data %>% add_predictions(lm_min_temp_month_lat, var = "tmin.gridmet.pred") %>%
+    add_predictions(lm_max_temp_month_lat, var = "tmax.gridmet.pred")
+daymet_can_data <- daymet_can_data %>% add_predictions(lm_min_temp_month_lat, var = "tmin.gridmet.pred") %>%
+    add_predictions(lm_max_temp_month_lat, var = "tmax.gridmet.pred")
+```
+
+# Plots
+
+``` {r temp}
+all_glac_data %>%
+    pivot_longer(cols = c(tmax.daymet, tmin.daymet, tmax.gridmet, tmin.gridmet, tmin.gridmet.pred, tmax.gridmet.pred)) %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "WB0401") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("GLAC historical Daymet and gridMET data with predicted gridMET")
+
+daymet_can_data %>%
+    pivot_longer(cols = c(tmax.daymet, tmin.daymet, tmin.gridmet.pred, tmax.gridmet.pred)) %>%
+    filter(year(date) == 2020, site == "JA-03-050") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("CAN historical Daymet data with predicted gridMET")
+```
+
+# Reconstruct Tavg data from modelled Tmin and Tmax
+
+```{r tavg}
+all_glac_data <- all_glac_data %>%
+    mutate(tavg.gridmet.pred = tmin.gridmet.pred + tmax.gridmet.pred)
+daymet_can_data <- daymet_can_data %>%
+    mutate(tavg.gridmet.pred = tmin.gridmet.pred + tmax.gridmet.pred)
+
+all_glac_data %>%
+    pivot_longer(cols = c(tavg.gridmet, tavg.gridmet, tavg.gridmet.pred)) %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "WB0401") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("Reconstructed gridMET Tavg data vs historical gridMET for GLAC")
+
+daymet_can_data %>%
+    pivot_longer(cols = c(tavg.gridmet, tavg.gridmet.pred)) %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "JA-03-050") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("Reconstructed gridMET Tavg data vs historical gridMET for GLAC")
+
+```
+
+# R Version
+
+```{r session-info}
+sessionInfo()
+```
+
+# References
