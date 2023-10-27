@@ -3,7 +3,7 @@ library(lubridate)
 
 data <- read_csv("./Qry_forErin.csv")
 
-data %>%
+data_cleaned <- data %>%
     mutate(Start_Date = strptime(Start_Date, format = "%m/%d/%Y %H:%M:%S")) %>%
     transmute(
         network = "fivepks",
@@ -33,5 +33,6 @@ data %>%
         ),
         mpb_status = NA,
         notes = ""
-    ) %>%
-    view()
+    )
+
+write_delim(data_cleaned, "./Qry_forErin_cleaned.csv", delim = ",")
