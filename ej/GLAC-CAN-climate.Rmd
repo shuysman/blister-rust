@@ -1,3 +1,4 @@
+
 ---
 title: "Modelling gridMET climate for CAN PIAL WPBR transects from Daymet data"
 author: "Stephen Huysman"
@@ -31,15 +32,56 @@ library(here)
 library(lubridate)
 library(tidyverse)
 library(modelr)
+library(sf)
+library(ggmap)
+library(terra)
+library(AOI)
+library(maps)
+library(assignR)
+library(elevatr)
+library(tidyterra)
+
+ccrp_presentation_dir <- "/home/steve/OneDrive/whitebark/blister-rust/ej/ccrp-presentation/"
+
+crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
 ## Transect location data provided by EJ
 parks <- read_csv("SITE_LOCATIONS.csv")
 
+parks_sf <- st_as_sf(drop_na(parks, lat, long),
+    coords = c("long", "lat"),
+    crs = crs_wgs84
+) %>%
+    filter(park != "GRSA", park != "ROMO", park != "GRBA")
+
+parks_elev <- get_elev_point(parks_sf, prj = crs_wgs84, src = "epqs")
+
+parks_elev.ras <- get_elev_raster(parks_sf, z = 5)
+
+parks_elev.aspect <- terrain(rast(parks_elev.ras), "aspect")
+
+parks_elev$aspect <- terra::extract(parks_elev.aspect, parks_sf)$aspect
+
+met_elev <- rast("/home/steve/OneDrive/gridMET/metdata_elevationdata.nc")
+
+parks_elev$met_elev <- terra::extract(met_elev, parks_sf)$elevation
+
+parks_elev$elev_bias <- parks_elev$elevation - parks_elev$met_elev
+
+parks_elev$t_correction_factor_gridmet <- parks_elev$elev_bias * 6.5 / 1000
+
+parks_elev %>%
+    group_by(park) %>%
+    summarize(
+        mean_bias = mean(elev_bias),
+        mean_t_correction = mean(t_correction_factor_gridmet)
+    )
+
 ## All Canadian transects
-trans_can <- parks %>% filter(park == "CAN")
+trans_can <- parks_elev %>% filter(park == "CAN")
 
 ## All Glacier NP transects
-trans_glac <- parks %>% filter(park == "GLAC")
+trans_glac <- parks_elev %>% filter(park == "GLAC")
 ##trans_glac <- parks %>% filter(park != "CAN")
 
 gridmet_dir <- file.path("out")
@@ -54,10 +96,63 @@ head(gridmet_glac_data); tail(gridmet_glac_data)
 gridmet_glac_data$transect_id = substr(gridmet_glac_data$transect_id,1,nchar(gridmet_glac_data$transect_id)-4)
 head(gridmet_glac_data); tail(gridmet_glac_data)
 
-gridmet_glac_data$Date = ymd(gridmet_glac_data$Date)
+gridmet_glac_data$Date <- ymd(gridmet_glac_data$Date)
 
 ## Daymet data dir.  Used for subsequent routine to download Daymet data or to load in previously downloaded data
 daymet_dir <- file.path("daymet")
+```
+
+## Map
+
+```{r map}
+##extent <- ext(parks_sf)
+
+NA_aoi <- aoi_get(x = "North America")
+
+extent <- ext(NA_aoi)
+
+base_map <- get_stamenmap(bbox = c(left = -125,
+                                    bottom = 35,
+                                    right = -105,
+                                    top = 55),
+          maptype = "terrain", 
+          crop = TRUE,
+          zoom = 5) 
+
+wbp_existing <- rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif")
+
+ggplot() +
+    geom_polygon(data = map_data("state"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
+    geom_polygon(data = map_data("world", "Canada"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
+    geom_spatraster(data = wbp_existing, mapping = aes(fill = wbp_existing), na.rm = TRUE, alpha = 0.3) +
+    scale_fill_continuous(name = "WBP Range", na.value = NA) +
+    geom_sf(data = parks_sf, aes(color = park), inherit.aes = FALSE) +
+    labs(color = "Parks") +
+    coord_sf(xlim = c(-125, -105), ylim = c(35, 55), crs = 4326) +
+    ggtitle("Whitebark WPBR Monitoring Sites") +
+    theme_bw(base_size = 16) +
+    scale_x_continuous(labels = function(x) paste0(x, '\u00B0', "W")) +
+    scale_y_continuous(labels = function(x) paste0(x, '\u00B0', "N")) +
+    ggspatial::annotation_scale(
+                   location = "tr",
+                   bar_cols = c("grey60", "white"),
+                   text_family = "ArcherPro Book"
+               ) +
+    ggspatial::annotation_north_arrow(
+                   location = "tr", which_north = "true",
+                   pad_x = unit(0.4, "in"), pad_y = unit(0.4, "in"),
+                   style = ggspatial::north_arrow_nautical(
+                                          fill = c("grey40", "white"),
+                                          line_col = "grey20",
+                                          text_family = "ArcherPro Book"
+                                      )
+               )
+ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
+
+
+##ggmap(base_map) +
+##    geom_sf(data = parks_sf, inherit.aes = FALSE, aes(color = park))
+
 ```
 
 ## Download Daymet data
@@ -95,7 +190,7 @@ daymet_glac_data <- bind_rows(lapply(daymet_glac_files, function(x) {
         mutate(
             site = str_split_i(site, pattern = "_1980_2022.csv", i = 1),
             tavg = (tmax..deg.c. + tmin..deg.c.) / 2,
-            svp = 610.8 * exp((17.27 * tavg / (237.3 + tavg))),
+            svp = 610.8 * exp((17.27 * tavg) / (237.3 + tavg)),
             rh = vp..Pa. / svp,
             date = ymd(parse_date_time(paste(year, yday), orders = "yj"))
         )
@@ -112,7 +207,7 @@ daymet_can_data <- bind_rows(lapply(daymet_can_files, function(x) {
             site = str_split_i(site, pattern = "_1980_2022.csv", i = 1),
             tavg = (tmax..deg.c. + tmin..deg.c.) / 2,
             svp = 610.8 * exp((17.27 * tavg / (237.3 + tavg))),
-            rh = vp..Pa. / svp,
+            rh = (vp..Pa. / svp) * 100,
             date = ymd(parse_date_time(paste(year, yday), orders = "yj"))
         ) })) %>%
         rename(
@@ -122,8 +217,8 @@ daymet_can_data <- bind_rows(lapply(daymet_can_files, function(x) {
             rh.daymet = rh
         ) %>%
         mutate(year = year(date), month = month(date)) %>%
-        select(site, latitude, longitude, date, year, month, tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet) %>%
-        drop_na(tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet)
+            select(site, latitude, longitude, date, year, month, tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet, vp..Pa., svp) %>%
+            drop_na(tavg.daymet, tmin.daymet, tmax.daymet, rh.daymet)
 
 daymet_can_data$month <- factor(daymet_can_data$month)
 
@@ -139,51 +234,86 @@ all_glac_data <- left_join(daymet_glac_data, gridmet_glac_data, by = c("site" = 
         tavg.gridmet = T,
         rh.gridmet = RH
     ) %>%
-    mutate(year = year(date), month = month(date)) %>%
-    select(site, latitude, longitude, date, year, month, tmax.daymet, tmin.daymet, tavg.daymet, rh.daymet, tmax.gridmet, tmin.gridmet, tavg.gridmet, rh.gridmet)
+    mutate(year = year(date), month = month(date), rh.daymet = rh.daymet * 100) %>%
+        select(site, latitude, longitude, date, year, month, tmax.daymet, tmin.daymet, tavg.daymet, rh.daymet, tmax.gridmet, tmin.gridmet, tavg.gridmet, rh.gridmet, vp..Pa., svp) 
 
 all_glac_data$month <- factor(all_glac_data$month)
+
+
+## add elevations
+daymet_can_data <- left_join(daymet_can_data, parks_elev, by = c("site" = "transect_id"))
+
+all_glac_data <- left_join(all_glac_data, parks_elev, by = c("site" = "transect_id"))
 ```
 # Modeling
 
-```{r models, cache = TRUE}
+## Temp
+```{r models-t, cache = TRUE, fig.width = 8, fig.height = 8}
 par(mfrow = c(2, 2))
 
 lm_min_temp <- lm(tmin.gridmet ~ tmin.daymet, data = all_glac_data)
 summary(lm_min_temp)
-plot(lm_min_temp)
+##plot(lm_min_temp)
 
 lm_max_temp <- lm(tmax.gridmet ~ tmax.daymet, data = all_glac_data)
 summary(lm_max_temp)
-plot(lm_max_temp)
+##plot(lm_max_temp)
 
-## lm_avg_temp <- lm(tavg.gridmet ~ tavg.daymet, data = all_glac_data)
-## summary(lm_avg_temp)
-## plot(lm_avg_temp)
+lm_min_temp2 <- lm(tmin.gridmet ~ poly(tmin.daymet, 2, raw = TRUE), data = all_glac_data)
+summary(lm_min_temp2)
+##plot(lm_min_temp2)
+
+lm_max_temp2 <- lm(tmax.gridmet ~ poly(tmax.daymet, 2, raw = TRUE), data = all_glac_data)
+summary(lm_max_temp2)
+##plot(lm_max_temp2)
+
+lm_min_temp3 <- lm(tmin.gridmet ~ poly(tmin.daymet, 3, raw = TRUE), data = all_glac_data)
+summary(lm_min_temp3)
+##plot(lm_min_temp3)
+
+lm_max_temp3 <- lm(tmax.gridmet ~ poly(tmax.daymet, 3, raw = TRUE), data = all_glac_data)
+summary(lm_max_temp3)
+##plot(lm_max_temp3)
 
 lm_min_temp_month <- lm(tmin.gridmet ~ tmin.daymet * month, data = all_glac_data)
 summary(lm_min_temp_month)
-plot(lm_min_temp_month)
+##plot(lm_min_temp_month)
 
 lm_max_temp_month <- lm(tmax.gridmet ~ tmax.daymet * month, data = all_glac_data)
 summary(lm_max_temp_month)
-plot(lm_max_temp_month)
+##plot(lm_max_temp_month)
 
-## lm_avg_temp_month <- lm(tavg.gridmet ~ tavg.daymet * month, data = all_glac_data)
-## summary(lm_avg_temp_month)
-## plot(lm_avg_temp_month)
+lm_min_temp_month2 <- lm(tmin.gridmet ~ poly(tmin.daymet, 2, raw = TRUE) * month, data = all_glac_data)
+summary(lm_min_temp_month2)
+##plot(lm_min_temp_month2)
 
-lm_min_temp_month_lat <- lm(tmin.gridmet ~ tmin.daymet * month + latitude, data = all_glac_data)
+lm_max_temp_month2 <- lm(tmax.gridmet ~ poly(tmax.daymet, 2, raw = TRUE) * month, data = all_glac_data)
+summary(lm_max_temp_month2)
+##plot(lm_max_temp_month2)
+
+lm_min_temp_month3 <- lm(tmin.gridmet ~ poly(tmin.daymet, 3, raw = TRUE) * month, data = all_glac_data)
+summary(lm_min_temp_month3)
+##plot(lm_min_temp_month3)
+
+lm_max_temp_month3 <- lm(tmax.gridmet ~ poly(tmax.daymet, 3, raw = TRUE) * month, data = all_glac_data)
+summary(lm_max_temp_month3)
+##plot(lm_max_temp_month3)
+
+lm_min_temp_month_lat <- lm(tmin.gridmet ~ tmin.daymet * month * latitude, data = all_glac_data)
 summary(lm_min_temp_month_lat)
-plot(lm_min_temp_month_lat)
+##plot(lm_min_temp_month_lat)
 
-lm_max_temp_month_lat <- lm(tmax.gridmet ~ tmax.daymet * month + latitude, data = all_glac_data)
+lm_max_temp_month_lat <- lm(tmax.gridmet ~ tmax.daymet * month * latitude, data = all_glac_data)
 summary(lm_max_temp_month_lat)
-plot(lm_max_temp_month_lat)
+##plot(lm_max_temp_month_lat)
 
-## lm_avg_temp_month_lat <- lm(tavg.gridmet ~ tavg.daymet * month + latitude, data = all_glac_data)
-## summary(lm_avg_temp_month_lat)
-## plot(lm_avg_temp_month_lat)
+lm_min_temp_month_lat2 <- lm(tmin.gridmet ~ poly(tmin.daymet, 3, raw = TRUE) * month * latitude, data = all_glac_data)
+summary(lm_min_temp_month_lat2)
+##plot(lm_min_temp_month_lat2)
+
+lm_max_temp_month_lat2 <- lm(tmax.gridmet ~ poly(tmax.daymet, 2, raw = TRUE) * month * latitude, data = all_glac_data)
+summary(lm_max_temp_month_lat2)
+##plot(lm_max_temp_month_lat2)
 
 anova(lm_min_temp_month, lm_min_temp)
 anova(lm_min_temp_month_lat, lm_min_temp_month)
@@ -194,51 +324,312 @@ anova(lm_max_temp_month_lat, lm_max_temp_month)
 ## Models are improved by adding month and lat, from results of ESS F-test
 
 ## Add predictions to dataframes
-all_glac_data <- all_glac_data %>% add_predictions(lm_min_temp_month_lat, var = "tmin.gridmet.pred") %>%
-    add_predictions(lm_max_temp_month_lat, var = "tmax.gridmet.pred")
-daymet_can_data <- daymet_can_data %>% add_predictions(lm_min_temp_month_lat, var = "tmin.gridmet.pred") %>%
-    add_predictions(lm_max_temp_month_lat, var = "tmax.gridmet.pred")
+all_glac_data <- all_glac_data %>%
+    add_predictions(lm_min_temp_month2, var = "tmin.gridmet.pred") %>%
+    add_predictions(lm_max_temp_month2, var = "tmax.gridmet.pred")
+daymet_can_data <- daymet_can_data %>%
+    add_predictions(lm_min_temp_month2, var = "tmin.gridmet.pred") %>%
+    add_predictions(lm_max_temp_month2, var = "tmax.gridmet.pred")
+
+all_glac_data <- all_glac_data %>%
+    mutate(tavg.gridmet.pred = (tmin.gridmet.pred + tmax.gridmet.pred) / 2)
+daymet_can_data <- daymet_can_data %>%
+    mutate(tavg.gridmet.pred = (tmin.gridmet.pred + tmax.gridmet.pred) / 2)
+```
+
+## RH
+
+``` {r models-rh}
+lm_rh <- lm(rh.gridmet ~ rh.daymet * month, data = all_glac_data)
+summary(lm_rh)
+
+lm_svp_vp <- lm(rh.gridmet ~ svp * month + vp..Pa. * month, data = all_glac_data)
+summary(lm_svp_vp)
+
+lm_rh2 <- lm(rh.gridmet ~  month * poly(svp, 2, raw = TRUE) + month * poly(vp..Pa., 2, raw = TRUE), data = all_glac_data)
+summary(lm_rh2)
+
+lm_rh2_elev <- lm(rh.gridmet ~ poly(rh.daymet, 2) * month + elevation, data = all_glac_data)
+summary(lm_rh2_elev)
+
+all_glac_data <- all_glac_data %>%
+    add_predictions(lm_rh2, var = "rh.gridmet.pred")
+
+daymet_can_data <- daymet_can_data %>%
+    add_predictions(lm_rh2, var = "rh.gridmet.pred")
+```
+
+## Save Models
+
+```{r save-models, eval = F}
+saveRDS(object = lm_min_temp_month2, "lm_min_temp_month2.RDS")
+saveRDS(object = lm_max_temp_month2, "lm_max_temp_month2.RDS")
+
 ```
 
 # Plots
 
-``` {r temp}
+## Historical
+Visualize historical and predicted data for one site for each GLAC and CAN, for months of August and September, 2000.
+
+``` {r temp, fig.width = 8, fig.height = 8}
+glac_data_summary <-
+    all_glac_data %>%
+    group_by(date) %>%
+    summarize(
+        tmax.gridmet = mean(tmax.gridmet),
+        tmin.gridmet = mean(tmin.gridmet),
+        tavg.gridmet = mean(tavg.gridmet),
+        tmax.gridmet.pred = mean(tmax.gridmet.pred),
+        tmin.gridmet.pred = mean(tmin.gridmet.pred),
+        tavg.gridmet.pred = mean(tavg.gridmet.pred),
+        tmax.daymet = mean(tmax.daymet),
+        tmin.daymet = mean(tmin.daymet),
+        tavg.daymet = mean(tavg.daymet),
+        rh.gridmet = mean(rh.gridmet),
+        rh.daymet = mean(rh.daymet),
+        rh.gridmet.pred = mean(rh.gridmet.pred)
+    )
+
+## single plots
 all_glac_data %>%
     pivot_longer(cols = c(tmax.daymet, tmin.daymet, tmax.gridmet, tmin.gridmet, tmin.gridmet.pred, tmax.gridmet.pred)) %>%
-    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "WB0401") %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "97-EM-01") %>%
     ggplot() +
     geom_line(mapping = aes(x = date, y = value, color = name)) +
-    ggtitle("GLAC historical Daymet and gridMET data with predicted gridMET")
+    ggtitle("GLAC historical temp Daymet and gridMET data with predicted gridMET")
 
 daymet_can_data %>%
     pivot_longer(cols = c(tmax.daymet, tmin.daymet, tmin.gridmet.pred, tmax.gridmet.pred)) %>%
-    filter(year(date) == 2020, site == "JA-03-050") %>%
+    filter(year(date) == 2010, month(date) == 8 | month(date) == 9, site == "JA-03-050") %>%
     ggplot() +
     geom_line(mapping = aes(x = date, y = value, color = name)) +
-    ggtitle("CAN historical Daymet data with predicted gridMET")
-```
-
-# Reconstruct Tavg data from modelled Tmin and Tmax
-
-```{r tavg}
-all_glac_data <- all_glac_data %>%
-    mutate(tavg.gridmet.pred = tmin.gridmet.pred + tmax.gridmet.pred)
-daymet_can_data <- daymet_can_data %>%
-    mutate(tavg.gridmet.pred = tmin.gridmet.pred + tmax.gridmet.pred)
+    ggtitle("CAN historical temp Daymet data with predicted gridMET")
 
 all_glac_data %>%
-    pivot_longer(cols = c(tavg.gridmet, tavg.gridmet, tavg.gridmet.pred)) %>%
+    pivot_longer(cols = contains("rh")) %>%
+    filter(year(date) >= 2000, year(date) <= 2005, month(date) == 8 | month(date) == 9, site == "97-EM-01") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    facet_wrap(~year, scales = "free_x") +
+    ggtitle("GLAC (97-EM-01) historical RH")
+ggsave(file.path(ccrp_presentation_dir, "97-EM-01_RH.png"), width = 8, height = 8)
+
+
+all_glac_data %>%
+    pivot_longer(cols = contains("rh")) %>%
+    filter(year(date) >= 2000, year(date) <= 2005, month(date) == 8 | month(date) == 9, site == "PP-004") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    facet_wrap(~year, scales = "free_x") +
+    ggtitle("GLAC (PP-004) historical RH")
+ggsave(file.path(ccrp_presentation_dir, "PP-004_RH.png"), width = 8, height = 8)
+
+all_glac_data %>%
+    pivot_longer(cols = contains("rh")) %>%
+    filter(year(date) >= 2000, year(date) <= 2005, month(date) == 8 | month(date) == 9, site == "WB0407") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    facet_wrap(~year, scales = "free_x") +
+    ggtitle("GLAC (WB0407) historical RH")
+ggsave(file.path(ccrp_presentation_dir, "WB0407_RH.png"), width = 8, height = 8)
+
+
+all_glac_data %>%
+    pivot_longer(cols = contains("rh")) %>%
+    filter(year(date) == 2010, site == "WB0471") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    facet_wrap(~year, scales = "free_x") +
+    ggtitle("GLAC (WB0741) historical RH")
+ggsave(file.path(ccrp_presentation_dir, "WB0471_2010_RH.png"), width = 8, height = 8)
+
+
+
+daymet_can_data %>%
+    pivot_longer(cols = contains("rh")) %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site ==  "JA-03-050") %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("CAN RH Daymet data with predicted gridMET")
+
+## all plots
+
+glac_data_summary %>%
+    pivot_longer(cols = contains(c("tmax", "tmin"))) %>%
+    filter(year(date) == 2000, month(date) == 8 | month(date) == 9) %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("GLAC 2000 Aug/Sep Min/Max Temperature averaged across all sites")
+
+glac_data_summary %>%
+    pivot_longer(cols = contains(c("tavg"))) %>%
+    filter(year(date) >= 2000, year(date) <= 2003, month(date) == 8 | month(date) == 9) %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("GLAC Aug/Sep 200 Mean Temperature All Transects") +
+    theme_bw(base_size = 16) +
+    theme(legend.position = "bottom") +
+##    theme(plot.title = element_textbox_simple()) +
+    labs(color = "Temperature") +
+    xlab("") +
+    ylab("°C") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+    facet_wrap(~ year(date), scales = "free_x")
+ggsave(file.path(ccrp_presentation_dir, "t_plot.png"), width = 9, height = 8)
+
+glac_data_summary %>%
+    pivot_longer(cols = contains("rh")) %>%
+    ##    filter(year(date) == 2000, month(date) == 8 | month(date) == 9) %>%
+    filter(year(date) >= 2000, year(date) <= 2003, month(date) == 8 | month(date) == 9) %>%
+    ggplot() +
+    geom_line(mapping = aes(x = date, y = value, color = name)) +
+    ggtitle("GLAC Aug/Sep 2000 RH Mean All Transects") +
+    theme_bw(base_size = 16) +
+    theme(legend.position = "bottom") +
+    xlab("") +
+    ylab("RH %") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+    facet_wrap(~ year(date), scales = "free_x")
+ggsave(file.path(ccrp_presentation_dir, "rh_plot.png"), width = 9, height = 9)
+
+
+```
+
+## Reconstruct Tavg data from modelled Tmin and Tmax
+
+```{r tavg, fig.width = 8, fig.height = 8}
+all_glac_data %>%
+    pivot_longer(cols = c(tavg.daymet, tavg.gridmet, tavg.gridmet.pred)) %>%
     filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "WB0401") %>%
     ggplot() +
     geom_line(mapping = aes(x = date, y = value, color = name)) +
     ggtitle("Reconstructed gridMET Tavg data vs historical gridMET for GLAC")
 
 daymet_can_data %>%
-    pivot_longer(cols = c(tavg.gridmet, tavg.gridmet.pred)) %>%
+    pivot_longer(cols = c(tavg.daymet, tavg.gridmet.pred)) %>%
     filter(year(date) == 2000, month(date) == 8 | month(date) == 9, site == "JA-03-050") %>%
     ggplot() +
     geom_line(mapping = aes(x = date, y = value, color = name)) +
-    ggtitle("Reconstructed gridMET Tavg data vs historical gridMET for GLAC")
+    ggtitle("Reconstructed gridMET Tavg data vs historical gridMET for GLAC") +
+    theme_bw(base_size = 18) +
+    theme(legend.position = "bottom") +
+    xlab("Date") +
+    ylab("°C")
+
+```
+
+## Average Temps
+
+``` {r avg-temps, fig.width = 8, fig.height = 8}                                                    
+## Annual
+all_glac_data %>%
+    pivot_longer(cols = contains(c("tmax", "tmin", "tavg"))) %>%
+    ggplot() +
+    geom_boxplot(aes(x = name, y = value, group = name)) +
+    stat_summary(fun = mean, aes(x = name, y = value, group = name), color = "red") +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab("") +
+    ylab("°C") +
+    ggtitle("GLAC Annual Temperature") +
+    theme_bw(base_size = 16)
+
+
+daymet_can_data %>%
+    pivot_longer(cols =  contains(c("tmax", "tmin", "tavg"))) %>%
+    ggplot() +
+    geom_boxplot(aes(x = name, y = value, group = name)) +
+    stat_summary(fun = mean, aes(x = name, y = value, group = name), color = "red") +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab("") +
+    ylab("°C") +
+    ggtitle("GLAC Annual Temperature") +
+    theme_bw(base_size = 16)
+
+## A-S
+bind_rows(all_glac_data, daymet_can_data) %>%
+    group_by(site) %>%
+    filter(month(date) == 8 | month(date) == 9) %>%
+    reframe(
+        tmax.daymet = mean(tmax.daymet),
+        tmin.daymet = mean(tmin.daymet),
+        tavg.daymet = mean(tavg.daymet),
+        tmax.gridmet = mean(tmax.gridmet),
+        tmin.gridmet = mean(tmin.gridmet),
+        tavg.gridmet = mean(tavg.gridmet),
+        tmax.gridmet.pred = mean(tmax.gridmet.pred),
+        tmin.gridmet.pred = mean(tmin.gridmet.pred),
+        tavg.gridmet.pred = mean(tavg.gridmet.pred),
+        park = park
+    ) %>%
+    mutate(park = factor(park, levels = c("GLAC", "CAN"))) %>%
+    pivot_longer(cols = contains(c("tmax", "tmin", "tavg"))) %>%
+    drop_na(value) %>%
+        ggplot() +
+        geom_boxplot(aes(x = name, y = value, group = name)) +
+        facet_wrap(~ park, scales = "free_x") +
+        stat_summary(fun = mean, aes(x = name, y = value, group = name), color = "red") +
+##        scale_x_discrete(guide = guide_axis(n.dodge = 3)) +
+        xlab("") +
+        ylab("A/S T °C") +
+    ggtitle("August/September Temperature") +
+    theme_bw(base_size = 20) +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+ggsave(file.path(ccrp_presentation_dir, "t_boxplot.png"), width = 8, height = 8)
+
+bind_rows(all_glac_data, daymet_can_data) %>%
+    group_by(site) %>%
+    filter(month(date) == 8 | month(date) == 9) %>%
+    reframe(
+        rh.daymet = mean(rh.daymet),
+        rh.gridmet = mean(rh.gridmet),
+        rh.gridmet.pred = mean(rh.gridmet.pred),
+        park = park
+    ) %>%
+    mutate(park = factor(park, levels = c("GLAC", "CAN"))) %>%
+    pivot_longer(cols = contains(c("rh"))) %>%
+    drop_na(value) %>%
+        ggplot() +
+        geom_boxplot(aes(x = name, y = value, group = name)) +
+        facet_wrap(~ park, scales = "free_x") +
+        stat_summary(fun = mean, aes(x = name, y = value, group = name), color = "red") +
+##        scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+        xlab("") +
+        ylab("RH %") +
+    ggtitle("August/September RH") +
+    theme_bw(base_size = 20) +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+ggsave(file.path(ccrp_presentation_dir, "rh_boxplot.png"), width = 8, height = 8)
+
+```
+
+# Bias Plots
+
+```{r bias}
+all_glac_data %>%
+    filter(site == "WB0407", month(date) == 8 | month(date) == 9) %>%
+    ggplot(aes(x = rh.daymet, y = rh.gridmet, color = month)) +
+    geom_point() +
+    geom_smooth()
+
+all_glac_data %>%
+    filter(month(date) == 8 | month(date) == 9) %>%
+    ggplot(aes(x = rh.daymet, y = rh.gridmet, color = elevation), alpha = 0.5) +
+    geom_point() 
+##    geom_smooth()
+
+all_glac_data %>%
+    filter(month(date) == 8 | month(date) == 9) %>%
+    ggplot(aes(x = rh.daymet, y = rh.gridmet, color = month, shape = factor(month))) +
+    geom_point(alpha = 0.25) +
+    geom_smooth()
+
+
+all_glac_data %>%
+##    filter(site == "WB0407") %>% ##, month(date) == 8 | month(date) == 9) %>%
+    ggplot(aes(x = rh.daymet, y = rh.gridmet, color = aspect)) +
+    geom_point() +
+    geom_smooth()
 
 ```
 
