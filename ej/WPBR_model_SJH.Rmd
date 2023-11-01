@@ -1,0 +1,836 @@
+---
+title: "WPBR Model"
+author: "Stephen Huysman"
+date: "`r Sys.Date()`"
+fontsize: 10pt 
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r}
+library(daymetr)
+library(lubridate)
+library(tidyverse)
+library(sf)
+library(terra)
+library(modelr)
+library(elevatr)
+library(janitor)
+
+crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+
+parks <- read_csv("./SITE_LOCATIONS.csv")
+
+##gridmet_data_dir <- "./out/elev_corrected"
+gridmet_data_dir <- "./out/"
+
+gridmet_files <- fs::dir_ls(path = gridmet_data_dir, glob = "*.csv")
+   
+gridmet_data <- vroom::vroom(gridmet_files, id = "transect_id", altrep = TRUE)
+
+gridmet_data <- gridmet_data %>%
+    select(-"...1") %>%
+    filter(
+        year(Date) >= 2000,
+        year(Date) <= 2020
+    ) %>%
+    mutate(transect_id = str_extract(transect_id, regex(".*/(.*)\\.csv"), group = 1)) %>%
+    filter(transect_id != "Butterfield") ## Issue pulling gridmet data for site
+
+## A-S Climate
+gridmet_data_as <- gridmet_data %>%
+    filter(month(Date) == 8 | month(Date) == 9) %>%
+    group_by(transect_id, year(Date)) %>%
+    summarize(
+        T = mean(T),
+        ##T_cor = mean(T_cor),
+        RH = mean(RH),
+        VPD = sum(VPD),
+        P = sum(P)
+    ) %>% ## Annual asVPD sum
+    group_by(transect_id) %>%
+    summarize(
+        asT = mean(T),
+        ##asT_cor = mean(T_cor),
+        asRH = mean(RH),
+        asVPD = mean(VPD), ## Mean annual asVPD sum
+        asP = mean(P) ## Mean annual P sum
+    ) %>%
+    mutate(
+        re_asT = scales::rescale(asT, newrange = c(0, 1)),
+        re_asRH = scales::rescale(asRH, newrange = c(0, 1)),
+        re_asVPD = scales::rescale(asVPD, newrange = c(0, 1))
+    )
+
+monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
+    left_join(parks, by = c("network", "transect_id")) %>%
+    filter(tree_species == "PIAL" | tree_species == "PINALB") %>%
+    filter(transect_id != "Butterfield") %>% ## Issue pulling gridmet data for site
+    filter(!is.na(dbh_cm), dbh_cm != 999, dbh_cm != -999, dbh_cm != Inf, dbh_cm != -Inf) %>%
+    filter(dbh_cm > 0) %>% ## Not sure what 0 cm dbh means, about 189 trees dbh=0
+    filter(!is.na(br_status))
+
+
+mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transect_id") ## %>%
+    ## filter(!is.na(asT), !is.na(asRH), !is.na(asVPD)) ## filter sites with missing climate data
+
+
+
+    ### Remove duplicate tree_id in transect.  Keep the first one found.
+    mod_data_tree_level <- mod_data_tree_level %>%
+        arrange(desc(year)) %>% ### Keep transects from most recent year
+        distinct(across(c(transect_id, tree_id)),
+            .keep_all = TRUE
+        ) %>%
+        mutate(br_status = factor(br_status))
+
+## %>%
+##     mutate(br_status = case_when(
+##         br_status == 1 ~ TRUE,
+##         br_status == 0 ~ FALSE
+##     ))
+
+
+```
+
+# Missing Data?
+Summarize sites with missing location & climate data data
+```{r}
+## All Monitoring Data Transects
+monitoring_data %>%
+    distinct(network, transect_id) %>%
+    group_by(network, transect_id) %>%
+    summarize() %>%
+    knitr::kable()
+
+## All Location Data Transects
+parks %>%
+    distinct(network, transect_id) %>%
+    group_by(network, transect_id) %>%
+    summarize() %>%
+    knitr::kable()
+
+## Missing Location data transects
+monitoring_data %>%
+    filter(!transect_id %in% parks$transect_id) %>%
+    group_by(network, transect_id) %>%
+    summarize() %>%
+    knitr::kable()
+
+
+## Any trees missing climate info?
+mod_data_tree_level %>% filter(is.na(asT))
+
+mod_data_tree_level %>% filter(is.na(asRH))
+
+mod_data_tree_level %>% filter(is.na(asVPD))
+
+mod_data_tree_level %>% filter(is.na(asP))
+
+mod_data_tree_level %>% filter(is.na(br_status))
+
+
+## Trees with 0dbh
+monitoring_data %>%
+    filter(dbh_cm == 0)
+
+```
+
+# EDA
+
+```{r fig.height = 12, fig.width = 12}
+library(GGally)
+
+cols = c("br_status", "dbh_cm", "asT", "asRH", "asVPD", "asP")
+
+ggpairs(mod_data_tree_level, columns = cols)
+
+ggpairs(mod_data_tree_level, columns = cols, mapping = aes(color = park))
+
+```
+
+## Season Plot
+Has Aug/September patters of climate shifted?
+
+```{r}
+monthly_climate <- gridmet_data %>%
+    mutate(
+        year = year(Date),
+        month = month(Date)
+    ) %>%
+    group_by(year, month, transect_id) %>%
+    summarize(P = sum(P),
+              VPD = sum(VPD),
+              RH = RH,
+              T = T) %>%
+    group_by(year, month) %>%
+    summarize(
+        P = mean(P),
+        T = mean(T),
+        VPD = mean(VPD),
+        RH = mean(RH)
+    )
+
+ggplot(monthly_climate, mapping = aes(x = month, y = RH, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = VPD, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = T, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = P, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12)
+```
+
+
+# Models
+
+```{r}
+library(MuMIn)
+
+```
+
+## Tree Level
+
+```{r}
+## Include P
+## include DBH
+## Elevation - lots of literature uses elevation, proxy for climate?
+
+
+## Unscaled
+glm_t_rh_vpd <- glm(data = mod_data_tree_level, br_status ~ asRH * asT * asVPD,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd)
+
+glm_t_rh_vpd_p <- glm(data = mod_data_tree_level, br_status ~ asRH * asT * asVPD + asP,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_p)
+
+
+glm_t_rh_vpd_2 <- glm(data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD,2),
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_2)
+
+glm_t_rh_vpd_p_2 <- glm(data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD,2) + poly(asP, 2),
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_p_2)
+
+
+## glm_full_cor <- glm(data = mod_data_tree_level, br_status  ~ asRH * asT_cor * asVPD,
+##                 family=binomial(link = "logit"))
+## summary(glm_full_cor)
+
+glm_rh_t <- glm(
+    data = mod_data_tree_level, br_status ~ asRH * asT,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t)
+
+glm_rh_t_2 <- glm(
+    data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2),
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_2)
+
+glm_rh_t_p <- glm(
+    data = mod_data_tree_level, br_status ~ asRH * asT + asP,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_p)
+
+glm_rh_t_p_2 <- glm(
+    data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) + poly(asP, 2),
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_p_2)
+
+glm_vpd_rh <- glm(data = mod_data_tree_level, br_status ~ asRH * asVPD,
+                  family = binomial(link = "logit"))
+summary(glm_vpd_rh)
+
+glm_rh <- glm(data = mod_data_tree_level, br_status  ~ asRH,
+                family=binomial(link = "logit"))
+summary(glm_rh)
+
+glm_t <- glm(data = mod_data_tree_level, br_status  ~ asT,
+                family=binomial(link = "logit"))
+summary(glm_t)
+
+glm_vpd <- glm(data = mod_data_tree_level, br_status  ~ asVPD,
+                family=binomial(link = "logit"))
+summary(glm_vpd)
+
+glm_vpd_t <- glm(data = mod_data_tree_level, br_status ~ asVPD * asT,
+                family=binomial(link = "logit"))
+summary(glm_vpd_t)
+
+
+model.sel(glm_t_rh_vpd, glm_t_rh_vpd_2, glm_t_rh_vpd_2, glm_t_rh_vpd_p_2, glm_rh_t, glm_rh_t_2, glm_rh_t_p, glm_rh_t_p_2, glm_vpd_rh, glm_rh, glm_vpd, glm_vpd_t, glm_t)
+
+## Exclude colinear variables
+model.sel(glm_rh_t, glm_rh_t_2, glm_rh_t_p, glm_rh_t_p_2, glm_rh, glm_vpd, glm_t)
+
+
+
+## Rescaled
+glm_re_t_rh_vpd <- glm(data = mod_data_tree_level, br_status ~ re_asRH * re_asT * re_asVPD,
+                family=binomial(link = "logit"))
+summary(glm_re_t_rh_vpd)
+
+glm_re_rh_t <- glm(
+    data = mod_data_tree_level, br_status ~ re_asRH * re_asT,
+    family = binomial(link = "logit")
+)
+summary(glm_re_rh_t)
+
+glm_re_vpd_rh <- glm(data = mod_data_tree_level, br_status ~ re_asRH * re_asVPD,
+                  family = binomial(link = "logit"))
+summary(glm_re_vpd_rh)
+
+glm_re_rh <- glm(data = mod_data_tree_level, br_status  ~ re_asRH,
+                family=binomial(link = "logit"))
+summary(glm_re_rh)
+
+glm_re_t <- glm(data = mod_data_tree_level, br_status  ~ re_asT,
+                family=binomial(link = "logit"))
+summary(glm_re_t)
+
+glm_re_vpd <- glm(data = mod_data_tree_level, br_status  ~ re_asVPD,
+                family=binomial(link = "logit"))
+summary(glm_re_vpd)
+
+glm_re_vpd_t <- glm(data = mod_data_tree_level, br_status ~ re_asVPD * re_asT,
+                family=binomial(link = "logit"))
+summary(glm_re_vpd_t)
+
+
+model.sel(glm_re_t_rh_vpd, glm_re_rh_t, glm_re_vpd_rh, glm_re_rh, glm_re_vpd, glm_re_vpd_t, glm_re_t)
+
+## Exclude colinear variables
+model.sel(glm_re_rh_t, glm_re_rh, glm_re_vpd, glm_re_t)
+
+
+library(lme4)
+
+## glmer_full <- glmer(
+##     data = mod_data_tree_level, br_status ~ asRH * asT * asVPD + (1 | transect_id),
+##     family = binomial(link = "logit")
+## )
+## summary(glmer_full)
+
+
+glmer_rh_t <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asRH) * scale(asT) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_rh_t)
+
+glmer_t <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asT) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_t)
+
+glmer_rh <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asRH) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_rh)
+
+glmer_vpd <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asVPD) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_vpd)
+
+glmer_rh_vpd <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asRH) * scale(asVPD) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_rh_vpd)
+
+glmer_t_vpd <- glmer(
+    data = mod_data_tree_level, br_status ~ scale(asVPD) * scale(asT) + (1 | transect_id:park) + (1 | park),
+    family = binomial(link = "logit")
+)
+summary(glmer_t_vpd)
+
+model.sel(glmer_rh_t, glmer_t, glmer_rh, glmer_vpd, glmer_rh_vpd, glmer_t_vpd)
+```
+## Tree Level with DBH
+
+```{r}
+glm_t_rh_vpd_dbh <- glm(data = mod_data_tree_level, br_status ~ asRH * asT * asVPD + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_dbh)
+
+glm_t_rh_vpd_2_dbh <- glm(data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD, 2) + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_2_dbh)
+
+glm_t_rh_vpd_p_dbh <- glm(data = mod_data_tree_level, br_status ~ asRH * asT * asVPD + asP + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_p_dbh)
+
+glm_t_rh_vpd_p_2_dbh <- glm(data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD, 2) + poly(asP, 2) + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_t_rh_vpd_p_2_dbh)
+
+glm_rh_t_dbh <- glm(
+    data = mod_data_tree_level, br_status ~ asRH * asT + dbh_cm,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_dbh)
+
+glm_rh_2_t_2_dbh <- glm(
+    data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) + dbh_cm,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_2_t_2_dbh)
+
+glm_rh_t_2_dbh <- glm(
+    data = mod_data_tree_level, br_status ~ asRH * poly(asT, 2) + dbh_cm,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_2_dbh)
+
+
+glm_rh_t_p_dbh <- glm(
+    data = mod_data_tree_level, br_status ~ asRH * asT + asP + dbh_cm,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_p_dbh)
+
+glm_rh_t_p_2_dbh <- glm(
+    data = mod_data_tree_level, br_status ~ poly(asRH, 2) * poly(asT, 2) + poly(asP, 2) + dbh_cm,
+    family = binomial(link = "logit")
+)
+summary(glm_rh_t_2_dbh)
+
+glm_vpd_rh_dbh <- glm(data = mod_data_tree_level, br_status ~ asRH * asVPD + dbh_cm,
+                  family = binomial(link = "logit"))
+summary(glm_vpd_rh_dbh)
+
+glm_rh_dbh <- glm(data = mod_data_tree_level, br_status  ~ asRH + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_rh_dbh)
+
+glm_t_dbh <- glm(data = mod_data_tree_level, br_status  ~ asT + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_t_dbh)
+
+glm_vpd_dbh <- glm(data = mod_data_tree_level, br_status  ~ asVPD + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_vpd_dbh)
+
+glm_vpd_t_dbh <- glm(data = mod_data_tree_level, br_status ~ asVPD * asT + dbh_cm,
+                family=binomial(link = "logit"))
+summary(glm_vpd_t_dbh)
+
+model.sel(glm_t_rh_vpd_dbh, glm_t_rh_vpd_2_dbh, glm_t_rh_vpd_p_dbh, glm_t_rh_vpd_p_2_dbh, glm_rh_t_dbh, glm_rh_t_2_dbh, glm_rh_t_p_dbh, glm_rh_t_p_2_dbh, glm_vpd_rh_dbh, glm_rh_dbh, glm_t_dbh, glm_vpd_dbh, glm_vpd_t_dbh)
+
+model.sel(glm_rh_t_dbh, glm_rh_t_2_dbh,  glm_rh_2_t_2_dbh,  glm_rh_dbh, glm_t_dbh, glm_vpd_dbh)
+
+
+```
+
+## Dredge
+
+```{r, fig.height = 16, fig.width = 16}
+global <- glm(
+    data = mod_data_tree_level,
+    br_status ~ poly(asT, 2) * poly(asRH, 2) * poly(asVPD, 2) * poly(asP, 2) + dbh_cm,
+    na.action = na.fail,
+    family = binomial(link = "logit")
+)
+
+all_subsets <- dredge(global)
+
+plot(all_subsets,
+    labAsExpr = TRUE
+)
+
+top_model <- get.models(all_subsets, subset = 1)[[1]]
+
+summary(top_model)
+```
+
+## Stepwise Selection
+
+```{r}
+fit_step <- step(glm(br_status ~ dbh_cm,
+                        data = mod_data_tree_level,
+                        family = binomial(link = "logit")),
+                    scope = br_status ~ dbh_cm + (asT * asRH * asP * asVPD) ^ 2,
+                 direction = "both")
+summary(fit_step)
+
+
+## Runs slow and just wants to include everything anyway
+## forward_step_poly <- step(glm(br_status ~ dbh_cm,
+##                         data = mod_data_tree_level,
+##                         family = binomial(link = "logit")),
+##                     scope = br_status ~ dbh_cm + I(asT ^ 2) * asT * I(asRH ^ 2) * asRH * I(asP ^ 2) * asP * I(asVPD ^ 2) * asVPD,
+##                     direction = "forward")
+## summary(forward_step_poly)
+```
+
+## Diagnostic Plots
+```{r fig.height = 14, fig.width = 14}
+library("scatterplot3d")
+library(GGally)
+library(performance)
+
+ggplot(mod_data_tree_level, mapping = aes(x = asRH, y = asVPD, color = network)) +
+    geom_point()
+
+ggplot(mod_data_tree_level, mapping = aes(x = asRH, y = asT, color = network)) +
+    geom_point()
+
+ggplot(mod_data_tree_level, mapping = aes(x = asT, y = asVPD, color = network)) +
+    geom_point()
+
+scatterplot3d(x = mod_data_tree_level$asRH, y = mod_data_tree_level$asVPD, z = mod_data_tree_level$asT)
+
+## ggpairs(mod_data_tree_level, columns = c("br_status", "asT", "asRH", "asVPD", "asT_cor"))
+## ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = c("br_status", "asT", "asRH", "asVPD", "asT_cor"))
+
+library(devtools)
+source_gist("524eade46135f6348140")
+ggplot(mod_data_tree_level, mapping = aes(x = asRH, y = asVPD)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    stat_smooth_func(geom="text",method="lm",hjust = 0, parse=TRUE) +
+    facet_wrap(~park, scales = "free")
+
+ggplot(mod_data_tree_level, mapping = aes(x = asRH, y = asVPD)) +
+    geom_point(aes(color = park)) +
+    geom_smooth(method = "lm") +
+    stat_smooth_func(geom="text",method="lm",hjust=0,parse=TRUE)
+
+ggplot(mod_data_tree_level, mapping = aes(x = asT, y = asVPD)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    stat_smooth_func(geom="text",method="lm",hjust = 0, parse=TRUE) +
+    facet_wrap(~park, scales = "free")
+
+check_model(glm_t_rh_vpd_dbh)
+
+check_model(glm_t_rh_vpd_2_dbh)
+
+check_model(glm_rh_t_dbh)
+
+check_model(glm_rh_t_2_dbh)
+
+check_model(glm_vpd_rh_dbh)
+
+check_model(glm_vpd_dbh)
+
+check_model(glm_rh_dbh)
+
+check_model(glm_t_dbh)
+
+```
+
+## Confusion Matrix
+
+
+### No DBH
+```{r}
+library(caret)
+
+set.seed(10)
+
+ctrl <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE, repeats = 5)
+
+glm_rh_t_vpd_train <- train(factor(br_status) ~ asRH * asT * asVPD,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_train <- train(factor(br_status) ~ asRH * asT,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_vpd_train <- train(factor(br_status) ~ asRH * asVPD,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+## glm_rh_t_cor_vpd_train <- train(factor(br_status) ~ asRH * asT_cor * asVPD,
+##     data = mod_data_tree_level,
+##     method = "glm", family = "binomial",
+##     trControl = ctrl, tuneLength = 5
+## )
+
+## glm_rh_t_cor_train <- train(factor(br_status) ~ asRH * asT_cor,
+##     data = mod_data_tree_level,
+##     method = "glm", family = "binomial",
+##     trControl = ctrl, tuneLength = 5
+## )
+
+
+print(glm_rh_t_vpd_train)
+print(glm_rh_t_train)
+print(glm_rh_vpd_train)
+##print(glm_rh_t_cor_vpd_train)
+##print(glm_rh_t_cor_train)
+
+confusionMatrix(glm_rh_t_vpd_train, norm = "none")
+confusionMatrix(glm_rh_t_train, norm = "none")
+confusionMatrix(glm_rh_vpd_train, norm = "none")
+##confusionMatrix(glm_rh_t_cor_vpd_train, norm = "none")
+##confusionMatrix(glm_rh_t_cor_train, norm = "none")
+```
+
+
+### With DBH
+```{r}
+library(caret)
+
+set.seed(10)
+
+ctrl <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE, repeats = 5)
+
+glm_rh_t_vpd_dbh_train <- train(factor(br_status) ~ asRH * asT * asVPD + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_vpd_2_dbh_train <- train(factor(br_status) ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
+glm_rh_t_vpd_p_dbh_train <- train(factor(br_status) ~ asRH * asT * asVPD + asP + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_vpd_p_2_dbh_train <- train(factor(br_status) ~ poly(asRH, 2) * poly(asT, 2) * poly(asVPD, 2) + poly(asP, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_dbh_train <- train(factor(br_status) ~ asRH * asT + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_2_dbh_train <- train(factor(br_status) ~ poly(asRH, 2) * poly(asT, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_p_dbh_train <- train(factor(br_status) ~ asRH * asT + asP + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_rh_t_p_2_dbh_train <- train(factor(br_status) ~ poly(asRH, 2) * poly(asT, 2) + asP + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+
+glm_rh_vpd_dbh_train <- train(factor(br_status) ~ asRH * asVPD + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_t_dbh_train <- train(factor(br_status) ~ asT + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
+glm_rh_dbh_train <- train(factor(br_status) ~ asRH + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+print(glm_rh_t_vpd_dbh_train)
+print(glm_rh_t_vpd_2_dbh_train)
+print(glm_rh_t_vpd_p_dbh_train)
+print(glm_rh_t_vpd_p_2_dbh_train)
+print(glm_rh_t_dbh_train)
+print(glm_rh_t_2_dbh_train)
+print(glm_rh_t_p_dbh_train)
+print(glm_rh_t_p_2_dbh_train)
+print(glm_rh_vpd_dbh_train)
+print(glm_t_dbh_train)
+print(glm_rh_dbh_train)
+
+## confusionMatrix(glm_rh_t_vpd_dbh_train, norm = "none")
+## confusionMatrix(glm_rh_t_dbh_train, norm = "none")
+## confusionMatrix(glm_rh_t_2_dbh_train, norm = "none")
+## confusionMatrix(glm_rh_vpd_dbh_train, norm = "none")
+## confusionMatrix(glm_t_dbh_train, norm = "none")
+## confusionMatrix(glm_rh_dbh_train, norm = "none")
+```
+
+
+## Top Model
+
+```{r}
+top_model_train <- train(formula(top_model),
+                         data = mod_data_tree_level,
+                         method = "glm", family = "binomial",
+                         trControl = ctrl, tuneLength = 5
+                         )
+
+print(top_model_train)
+
+
+step_train <- train(formula(fit_step),
+                         data = mod_data_tree_level,
+                         method = "glm", family = "binomial",
+                         trControl = ctrl, tuneLength = 5
+                         )
+print(step_train)
+```
+
+##  Effects
+
+```{r}
+mod_data_tree_level %>%
+    select(asT) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(asRH) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(asP) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(dbh_cm) %>%
+    range()
+
+library(ggeffects)
+
+## No DBH
+plot(ggpredict(glm_rh_t), facet = TRUE)
+
+plot(ggpredict(glm_rh_t, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_rh_t_2), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_2, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_t_rh_vpd_2), facet = TRUE)
+
+plot(ggpredict(glm_t_rh_vpd_2, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_rh_t_p), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_p, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+plot(ggpredict(glm_rh_t_p_2), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_p_2, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+## DBH
+plot(ggpredict(glm_rh_t_dbh), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_dbh, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_rh_t_dbh, terms = c("dbh_cm")), facet = TRUE)
+
+
+plot(ggpredict(glm_rh_t_2_dbh), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_2_dbh, terms = c("asT", "asRH")))
+
+plot(ggpredict(glm_rh_t_2_dbh, terms = c("asT", "asRH")), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_2_dbh, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_rh_t_2_dbh, terms = c("dbh_cm")))
+
+
+plot(ggpredict(glm_rh_2_t_2_dbh), facet = TRUE)
+
+plot(ggpredict(glm_rh_2_t_2_dbh, terms = c("asT", "asRH")))
+
+plot(ggpredict(glm_rh_2_t_2_dbh, terms = c("asT", "asRH")), facet = TRUE)
+
+plot(ggpredict(glm_rh_2_t_2_dbh, terms = c("asRH", "asT [8, 10, 12, 14, 16]")))
+
+plot(ggpredict(glm_rh_2_t_2_dbh, terms = c("dbh_cm")))
+
+
+plot(ggpredict(glm_rh_t_p_dbh), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_p_dbh, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+plot(ggpredict(glm_rh_t_p_dbh, terms = c("dbh_cm")), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_p_2_dbh), facet = TRUE)
+
+plot(ggpredict(glm_rh_t_p_2_dbh, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+plot(ggpredict(glm_rh_t_p_2_dbh, terms = c("dbh_cm")), facet = TRUE)
+
+
+plot(ggpredict(top_model), facet = TRUE)
+
+plot(ggpredict(top_model, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+plot(ggpredict(top_model, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asVPD")))
+
+plot(ggpredict(top_model, terms = c("dbh_cm")), facet = TRUE)
+
+
+plot(ggpredict(fit_step), facet = TRUE)
+
+plot(ggpredict(fit_step, terms = c("asRH", "asT [8, 10, 12, 14, 16]", "asP")))
+
+plot(ggpredict(fit_step, terms = c("dbh_cm")), facet = TRUE)
+```
+
+# Random Forest
+
+``` r
+library(randomForest)
+
+set.seed(10)
+ind <- sample(2, nrow(mod_data_tree_level), replace = TRUE, prob = c(0.7, 0.3))
+train <- mod_data_tree_level[ind == 1,]
+test <- mod_data_tree_level[ind == 2,]
+
+rf <- randomForest(br_status ~ dbh_cm + asT + asP + asRH + asVPD, data = train)
+
+p1 <- predict(rf, train)
+confusionMatrix(p1, train$br_status)
+
+p2 <- predict(rf, test)
+confusionMatrix(p2, test$br_status)
+
+plot(rf)
+```
