@@ -1,0 +1,856 @@
+---
+title: "WPBR Model"
+author: "Stephen Huysman"
+date: "`r Sys.Date()`"
+fontsize: 10pt 
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# Load Data
+```{r}
+library(daymetr)
+library(lubridate)
+library(tidyverse)
+library(sf)
+library(terra)
+library(modelr)
+library(elevatr)
+library(janitor)
+library(MuMIn)
+library(GGally)
+library(lme4)
+library(ggeffects)
+
+crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+
+parks <- read_csv("./SITE_LOCATIONS.csv")
+
+##gridmet_data_dir <- "./out/elev_corrected"
+gridmet_data_dir <- "./out/"
+
+gridmet_files <- fs::dir_ls(path = gridmet_data_dir, glob = "*.csv")
+   
+gridmet_data <- vroom::vroom(gridmet_files, id = "transect_id", altrep = TRUE)
+
+gridmet_data <- gridmet_data %>%
+    select(-"...1") %>%
+    filter(
+        year(Date) >= 2000,
+        year(Date) <= 2020
+    ) %>%
+    mutate(transect_id = str_extract(transect_id, regex(".*/(.*)\\.csv"), group = 1)) %>%
+    filter(transect_id != "Butterfield") ## Issue pulling gridmet data for site
+
+gridmet_data_annual <- gridmet_data %>%
+    group_by(transect_id, year(Date)) %>%
+    summarize(max_T = max(T),
+              min_T = min(T),
+              max_P = max(P),
+              min_P = min(P),
+              max_VPD = max(VPD),
+              min_VPD = min(VPD),
+              max_RH = max(RH),
+              min_RH = min(RH)) %>%
+    group_by(transect_id) %>%
+    summarize(max_T = mean(max_T),
+              min_T = mean(min_T),
+              max_P = mean(max_P),
+              min_P = mean(min_P),
+              max_VPD = mean(max_VPD),
+              min_VPD = mean(min_VPD),
+              max_RH = mean(max_RH),
+              min_RH = mean(min_RH))
+
+## A-S Climate
+gridmet_data_as <- gridmet_data %>%
+    filter(month(Date) == 8 | month(Date) == 9) %>%
+    group_by(transect_id, year(Date)) %>%
+    summarize(
+        T = mean(T),
+        ##T_cor = mean(T_cor),
+        RH = mean(RH),
+        VPD = sum(VPD),
+        P = sum(P)
+    ) %>% ## Annual asVPD sum
+    group_by(transect_id) %>%
+    summarize(
+        asT = mean(T),
+        ##asT_cor = mean(T_cor),
+        asRH = mean(RH),
+        asVPD = mean(VPD), ## Mean annual asVPD sum
+        asP = mean(P) ## Mean annual P sum
+    ) %>%
+    mutate(
+        re_asT = scales::rescale(asT, newrange = c(0, 1)),
+        re_asRH = scales::rescale(asRH, newrange = c(0, 1)),
+        re_asVPD = scales::rescale(asVPD, newrange = c(0, 1)),
+        re_asP = scales::rescale(asP, newrange = c(0, 1))
+    )
+
+monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
+    left_join(parks, by = c("network", "transect_id")) %>%
+    filter(tree_species == "PIAL" | tree_species == "PINALB") %>%
+    filter(transect_id != "Butterfield") %>% ## Issue pulling gridmet data for site
+    filter(!is.na(dbh_cm), dbh_cm != 999, dbh_cm != -999, dbh_cm != Inf, dbh_cm != -Inf) %>%
+    filter(dbh_cm > 0) %>% ## Not sure what 0 cm dbh means, about 189 trees dbh=0
+    filter(!is.na(br_status))
+
+
+mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transect_id") ## %>%
+    ## filter(!is.na(asT), !is.na(asRH), !is.na(asVPD)) ## filter sites with missing climate data
+
+
+
+    ### Remove duplicate tree_id in transect.  Keep the first one found.
+    mod_data_tree_level <- mod_data_tree_level %>%
+        arrange(desc(year)) %>% ### Keep transects from most recent year
+        distinct(across(c(transect_id, tree_id)),
+            .keep_all = TRUE
+        ) %>%
+        mutate(br_status = factor(br_status)) ##%>%
+        ## filter(network != "BLM_ID")
+
+
+        mod_data_tree_level <- mod_data_tree_level %>%
+            left_join(gridmet_data_annual, by = "transect_id")
+
+
+## %>%
+##     mutate(br_status = case_when(
+##         br_status == 1 ~ TRUE,
+##         br_status == 0 ~ FALSE
+##     ))
+
+```
+
+```
+
+# A priori models
+| Variable | Description              |
+|----------|--------------------------|
+| asT      | Aug/Sep Mean Temperature |
+| asRH     | Aug/Sep Mean RH          |
+| asVPD    | Aug/Sep Sum of VPD       |
+| asP      | Aug/Sep Sum of P         |
+
+- Location variables?
+
+# EDA
+
+```{r}
+cols = c("br_status", "asT", "asVPD", "asRH", "asP", "dbh_cm")
+
+ggpairs(mod_data_tree_level, columns = cols)
+
+ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = cols)
+
+```
+
+## Season Plot
+Has Aug/September patters of climate shifted?
+
+```{r}
+monthly_climate <- gridmet_data %>%
+    left_join(parks, by = "transect_id") %>%
+    mutate(
+        year = year(Date),
+        month = month(Date)
+    ) %>%
+    group_by(year, month, park, transect_id) %>%
+    summarize(
+        P = sum(P),
+        VPD = sum(VPD),
+        RH = RH,
+        T = T
+    ) %>%
+    group_by(year, month, park) %>%
+    summarize(
+        P = mean(P),
+        T = mean(T),
+        VPD = mean(VPD),
+        RH = mean(RH),
+        transect_id = transect_id
+    )
+
+ggplot(monthly_climate, mapping = aes(x = month, y = RH, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12) +
+    geom_vline(xintercept = 8) +
+    geom_vline(xintercept = 10) +
+    facet_wrap(~park)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = VPD, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12) +
+    geom_vline(xintercept = 8) +
+    geom_vline(xintercept = 10) +
+    facet_wrap(~park)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = T, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12) +
+    geom_vline(xintercept = 8) +
+    geom_vline(xintercept = 10) +
+    facet_wrap(~park)
+
+ggplot(monthly_climate, mapping = aes(x = month, y = P, color = year, group = year)) +
+    geom_line() +
+    scale_x_continuous(breaks = 1:12) +
+    geom_vline(xintercept = 8) +
+    geom_vline(xintercept = 10) +
+    facet_wrap(~park)
+```
+
+# Model Selection
+
+## Test for Covariance
+```{r}
+glmer_all <- glmer(br_status ~ asT + asVPD + asRH + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial
+)
+
+summary(glmer_all)
+
+cor_table <- vcov(glmer_all) %>%
+    cov2cor() %>%
+    as.matrix()
+
+cor_table %>%
+    knitr::kable()
+
+abs(cor_table) > 0.7
+
+library(corrplot)
+corrplot(cor(select(mod_data_tree_level, asT, asVPD, asP, asRH, dbh_cm)), method = "number", type = "upper")
+
+corrplot(cor(select(mod_data_tree_level, max_T, min_T, max_P, min_P, max_VPD, min_VPD, max_RH, min_RH, dbh_cm)), method = "number", type = "upper")
+
+```
+
+Collinear variables (glmer_all):
+asT, asVPD
+asVPD, asRH
+
+Corrplot:
+asT, asVPD
+asRH, asP
+asVPD, asRH? = -0.57
+
+## Only FE
+
+``` r
+glm_t <- glm(br_status ~ asT + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t)
+
+glm_t_2 <- glm(br_status ~ poly(asT, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2)
+
+## Square T?
+anova(glm_t, glm_t_2, test = "Chisq")
+
+glm_vpd <- glm(br_status ~ asVPD + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd)
+
+glm_vpd_2 <- glm(br_status ~ poly(asVPD, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_2)
+
+## Square VPD?
+anova(glm_vpd, glm_vpd_2, test = "Chisq")
+
+
+glm_rh <- glm(br_status ~ asRH + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_rh)
+
+glm_rh_2 <- glm(br_status ~ poly(asRH, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_rh_2)
+
+## square rh?
+anova(glm_rh, glm_rh_2, test = "Chisq")
+
+
+glm_p <- glm(br_status ~ asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_p)
+
+glm_p_2 <- glm(br_status ~ poly(asP, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_p_2)
+
+## Square P?
+anova(glm_p, glm_p_2, test = "Chisq")
+
+
+glm_t_rh <- glm(br_status ~ asT * asRH + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_rh)
+
+glm_t_2_rh <- glm(br_status ~ poly(asT, 2) * asRH + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_rh)
+
+anova(glm_t_rh, glm_t_2_rh, test = "Chisq")
+
+glm_t_2_rh_2 <- glm(br_status ~ poly(asT, 2) * poly(asRH, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_rh_2)
+
+anova(glm_t_2_rh, glm_t_2_rh_2, test = "Chisq")
+
+
+glm_t_2_p <- glm(br_status ~ poly(asT, 2) * asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_p)
+
+glm_t_2_p_2 <- glm(br_status ~ poly(asT, 2) * poly(asP, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_p_2)
+
+anova(glm_t_2_p, glm_t_2_p_2, test = "Chisq")
+
+## glm_t_2_p_rh <- glm(br_status ~ poly(asT, 2) * asRH + asP + dbh_cm,
+##                    data = mod_data_tree_level,
+##                    family = binomial
+##                  )
+## summary(glm_t_2_p_rh)
+
+## glm_p_rh <- glm(br_status ~ asP + asRH + dbh_cm,
+##                    data = mod_data_tree_level,
+##                    family = binomial
+##                  )
+## summary(glm_p_rh)
+
+glm_vpd_p <- glm(br_status ~ asVPD* asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_p)
+
+glm_vpd_2_p <- glm(br_status ~ poly(asVPD, 2) * asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_2_p)
+
+anova(glm_vpd_p, glm_vpd_2_p, test = "Chisq")
+
+glm_vpd_2_p_2 <- glm(br_status ~ poly(asVPD, 2) * poly(asP, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_2_p_2)
+
+anova(glm_vpd_2_p, glm_vpd_2_p_2, test = "Chisq")
+
+glm_max_vpd_2 <- glm(br_status ~ poly(max_VPD, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    family = binomial
+)
+summary(glm_max_vpd_2)
+
+##model.sel(glm_t, glm_t_2, glm_rh, glm_p, glm_t_rh, glm_t_2_rh, glm_t_p, glm_t_2_p, glm_t_p_rh, glm_t_2_p_rh, glm_p_rh, glm_vpd, glm_vpd_2, glm_vpd_p, glm_vpd_2_p)
+##model.sel(glm_t_2, glm_rh_2, glm_p_2, glm_t_2_rh_2, glm_t_p, glm_t_2_p, glm_vpd_2, glm_vpd_p, glm_vpd_2_p, glm_max_vpd)
+model.sel(glm_t_2, glm_rh_2, glm_p_2, glm_t_2_rh_2, glm_t_2_p_2, glm_vpd_2, glm_vpd_2_p_2, glm_max_vpd_2)
+
+mod_data_tree_level %>%
+    select(asT) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(asRH) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(asP) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(asVPD) %>%
+    range()
+
+mod_data_tree_level %>%
+    select(dbh_cm) %>%
+    range()
+
+
+plot(ggpredict(glm_t_2_p_2), facet = TRUE)
+
+plot(ggpredict(glm_t_2_p_2, terms = c("asP", "asT")), facet = TRUE)
+
+plot(ggpredict(glm_t_2_p_2, terms = c("asP",  "asT [8, 10, 12, 14]")))
+
+plot(ggpredict(glm_vpd_2_p_2), facet = TRUE)
+
+plot(ggpredict(glm_vpd_2_p_2, terms = c("asVPD",  "asP [5, 50, 100, 150, 190]")))
+
+plot(ggpredict(glm_vpd_2_p_2, terms = c("asP", "asVPD [45, 50, 60, 65, 70]")))
+
+```
+
+### Confusion Matrix
+
+``` r
+library(caret)
+
+set.seed(255)
+
+ctrl <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE, repeats = 5)
+
+
+glm_vpd_2_p_2_train <- train(factor(br_status) ~ poly(asVPD, 2) * poly(asP, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
+glm_t_2_p_2_train <- train(factor(br_status) ~ poly(asT, 2) * poly(asP, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
+glm_p_2_train <- train(factor(br_status) ~ poly(asP, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+glm_t_2_rh_2_train <- train(factor(br_status) ~ poly(asT, 2) * poly(asRH, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
+glm_rh_2_train <- train(factor(br_status) ~ poly(asRH, 2) + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+)
+
+print(glm_vpd_2_p_2_train)
+print(glm_t_2_p_2_train)
+print(glm_p_2_train)
+print(glm_t_2_rh_2_train)
+print(glm_rh_2_train)
+```
+
+
+## W/ Random Effects
+### Nested transect within Park
+```{r}
+glmer_t <- glmer(br_status ~ asT + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t)
+
+glmer_t_2 <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_2)
+
+glmer_vpd <- glmer(br_status ~ asVPD + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_vpd)
+
+glmer_rh <- glmer(br_status ~ asRH + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                  family = binomial,
+                  control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_rh)
+
+glmer_p <- glmer(br_status ~ asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_p)
+
+glmer_t_rh <- glmer(br_status ~ asT * asRH + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_rh)
+
+glmer_t_2_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_2_rh)
+
+glmer_t_p <- glmer(br_status ~ asT + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_p)
+
+glmer_t_2_p <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_2_p)
+
+glmer_t_p_rh <- glmer(br_status ~ asT * asRH + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_p_rh)
+
+glmer_t_2_p_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_t_2_p_rh)
+
+glmer_p_rh <- glmer(br_status ~ asP + asRH + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_p_rh)
+
+glmer_vpd_p <- glmer(br_status ~ asVPD + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_vpd_p)
+
+model.sel(glmer_t, glmer_t_2, glmer_rh, glmer_p, glmer_t_rh, glmer_t_2_rh, glmer_t_p, glmer_t_2_p, glmer_t_p_rh, glmer_t_2_p_rh, glmer_p_rh, glmer_vpd, glmer_vpd_p)
+
+```
+
+### Just Transect
+
+``` r
+glmer_transect_t <- glmer(br_status ~ asT + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t)
+
+glmer_transect_t_2 <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_2)
+
+glmer_transect_vpd <- glmer(br_status ~ asVPD + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_vpd)
+
+glmer_transect_rh <- glmer(br_status ~ asRH + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                  family = binomial,
+                  control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_rh)
+
+glmer_transect_p <- glmer(br_status ~ asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_p)
+
+glmer_transect_t_rh <- glmer(br_status ~ asT * asRH + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_rh)
+
+glmer_transect_t_2_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_2_rh)
+
+glmer_transect_t_p <- glmer(br_status ~ asT + asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_p)
+
+glmer_transect_t_2_p <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_2_p)
+
+glmer_transect_t_p_rh <- glmer(br_status ~ asT * asRH + asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_p_rh)
+
+glmer_transect_t_2_p_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_t_2_p_rh)
+
+glmer_transect_p_rh <- glmer(br_status ~ asP + asRH + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_p_rh)
+
+glmer_transect_vpd_p <- glmer(br_status ~ asVPD + asP + dbh_cm + (1 | transect_id),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_transect_vpd_p)
+
+model.sel(glmer_transect_t, glmer_transect_t_2, glmer_transect_rh, glmer_transect_p, glmer_transect_t_rh, glmer_transect_t_2_rh, glmer_transect_t_p, glmer_transect_t_2_p, glmer_transect_t_p_rh, glmer_transect_t_2_p_rh, glmer_transect_p_rh, glmer_transect_vpd, glmer_transect_vpd_p)
+
+```
+
+### Just Park
+
+``` r
+glmer_park_t <- glmer(br_status ~ asT + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t)
+
+glmer_park_t_2 <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_2)
+
+glmer_park_vpd <- glmer(br_status ~ asVPD + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_vpd)
+
+glmer_park_rh <- glmer(br_status ~ asRH + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                  family = binomial,
+                  control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_rh)
+
+glmer_park_p <- glmer(br_status ~ asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                 family = binomial,
+                 control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_p)
+
+glmer_park_t_rh <- glmer(br_status ~ asT * asRH + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_rh)
+
+glmer_park_t_2_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_2_rh)
+
+glmer_park_t_p <- glmer(br_status ~ asT + asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_p)
+
+glmer_park_t_2_p <- glmer(br_status ~ poly(asT, 2, raw = TRUE) + asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_2_p)
+
+glmer_park_t_p_rh <- glmer(br_status ~ asT * asRH + asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_p_rh)
+
+glmer_park_t_2_p_rh <- glmer(br_status ~ poly(asT, 2, raw = TRUE) * asRH + asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_t_2_p_rh)
+
+glmer_park_p_rh <- glmer(br_status ~ asP + asRH + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_p_rh)
+
+glmer_park_vpd_p <- glmer(br_status ~ asVPD + asP + dbh_cm + (1 | park),
+                   data = mod_data_tree_level,
+                   family = binomial,
+                   control = glmerControl(optimizer = "bobyqa")
+                 )
+summary(glmer_park_vpd_p)
+
+model.sel(glmer_park_t, glmer_park_t_2, glmer_park_rh, glmer_park_p, glmer_park_t_rh, glmer_park_t_2_rh, glmer_park_t_p, glmer_park_t_2_p, glmer_park_t_p_rh, glmer_park_t_2_p_rh, glmer_park_p_rh, glmer_park_vpd, glmer_park_vpd_p)
+
+```
+
+## Just GYE
+
+```{r}
+gye_data <- mod_data_tree_level %>% filter(network == "gryn")
+
+glm_gye_all <- glm(br_status ~ asT + asRH + asVPD + asP + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+)
+summary(glm_gye_all)
+
+
+cor_table <- vcov(glm_gye_all) %>%
+    cov2cor() %>%
+    as.matrix()
+
+cor_table %>%
+    knitr::kable()
+
+abs(cor_table) > 0.7
+
+performance::check_collinearity(glm_gye_all)
+
+glm_gye_t <- glm(br_status ~ asT + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t)
+
+glm_gye_t_2 <- glm(br_status ~ poly(asT, 2) + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_2)
+
+glm_gye_rh <- glm(br_status ~ asRH + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_rh)
+
+glm_gye_vpd <- glm(br_status ~ asVPD + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_vpd)
+
+glm_gye_vpd_2 <- glm(br_status ~ poly(asVPD, 2) + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_vpd_2)
+
+glm_gye_t_rh <- glm(br_status ~ asT * asRH + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_rh)
+
+glm_gye_t_2_rh <- glm(br_status ~ poly(asT, 2) * asRH + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_2_rh)
+
+glm_gye_t_p_rh <- glm(br_status ~ asT * asRH + asP + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_p_rh)
+
+glm_gye_t_2_p_rh <- glm(br_status ~ poly(asT, 2) * asRH + asP + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_2_p_rh)
+
+model.sel(glm_gye_t, glm_gye_t_2, glm_gye_rh, glm_gye_vpd, glm_gye_vpd_2, glm_gye_t_rh, glm_gye_t_2_rh, glm_gye_t_p_rh, glm_gye_t_2_p_rh)
+
+
+
+plot(ggpredict(glm_gye_t_2_p_rh), facet = TRUE)
+
+plot(ggpredict(glm_gye_t_2_p_rh, terms = c("asRH", "asT [8, 10, 12, 14]")), facet = TRUE)
+
+plot(ggpredict(glm_gye_t_rh), facet = TRUE)
+
+plot(ggpredict(glm_gye_t_rh, terms = c("asRH",  "dbh_cm", "asT [8, 10, 12, 14]")), facet = TRUE)
+
+```
