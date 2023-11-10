@@ -139,7 +139,7 @@ mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transec
 # EDA
 
 ```{r}
-cols = c("br_status", "asT", "asVPD", "asRH", "asP", "dbh_cm")
+cols = c("br_status", "asT", "asVPD", "asRH", "asP", "dbh_cm", "lat", "long")
 
 ggpairs(mod_data_tree_level, columns = cols)
 
@@ -342,6 +342,13 @@ summary(glm_t_2_rh_2)
 anova(glm_t_2_rh, glm_t_2_rh_2, test = "Chisq")
 
 
+glm_t_p <- glm(br_status ~ asT * asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_p)
+
+
 glm_t_2_p <- glm(br_status ~ poly(asT, 2) * asP + dbh_cm,
                    data = mod_data_tree_level,
                    family = binomial
@@ -411,8 +418,7 @@ model.sel(glm_t,
           glm_t_rh,
           glm_t_p,
           glm_vpd,
-          glm_vpd_p,
-          glm_max_vpd)
+          glm_vpd_p)
 
 ## Second Order Models
 model.sel(glm_t_2,
@@ -421,8 +427,7 @@ model.sel(glm_t_2,
           glm_t_2_rh_2,
           glm_t_2_p_2,
           glm_vpd_2,
-          glm_vpd_2_p_2,
-          glm_max_vpd_2)
+          glm_vpd_2_p_2)
 
 ## All Models
 model.sel(glm_t,
@@ -432,7 +437,6 @@ model.sel(glm_t,
           glm_t_p,
           glm_vpd,
           glm_vpd_p,
-          glm_max_vpd,
           glm_t_2,
           glm_rh_2,
           glm_p_2,
@@ -449,22 +453,19 @@ model.sel(glm_t,
 model.sel(glm_t,
           glm_rh,
           glm_t_rh,
-          glm_vpd,
-          glm_max_vpd)
+          glm_vpd)
 
 ## Second Order
 model.sel(glm_t_2,
           glm_rh_2,
           glm_t_2_rh_2,
-          glm_vpd_2,
-          glm_max_vpd_2)
+          glm_vpd_2)
 
 ## All
 model.sel(glm_t,
           glm_rh,
           glm_t_rh,
           glm_vpd,
-          glm_max_vpd,
           glm_t_2,
           glm_rh_2,
           glm_t_2_rh_2,
@@ -549,6 +550,14 @@ summary(glm_t_2_rh_2_park)
 
 residualPlots(glm_t_2_rh_2_park, terms = ~ 1 | park)
 
+
+
+nbc <- 10
+cor_r <- pgirmess::correlog(coords=mod_data_tree_level[,c("long", "lat")],
+                            z=glm_vpd_2_p_2$residuals,
+                            method="Moran", nbclass=nbc)
+
+cor_r
 
 ```
 
@@ -647,6 +656,190 @@ print(glm_t_2_rh_2_train)
 print(glm_rh_2_train)
 ```
 
+## spaMM
+
+``` r
+library(spaMM)
+
+glm_t_rh_spatial <- spaMM::fitme(br_status ~ dbh_cm + asT + asRH + Matern(1 | lat + long), data = mod_data_tree_level, family = binomial(), nb_cores = 12)
+summary(glm_t_rh_spatial)
+
+coefs <- as.data.frame(summary(glm_t_rh_spatial)$beta_table)
+
+row <- row.names(coefs) %in% c('asT')
+lower <- coefs[row,'Estimate'] - 1.96*coefs[row, 'Cond. SE']
+upper <- coefs[row,'Estimate'] + 1.96*coefs[row, 'Cond. SE']
+c(lower, upper)
+
+row <- row.names(coefs) %in% c('asRH')
+lower <- coefs[row,'Estimate'] - 1.96*coefs[row, 'Cond. SE']
+upper <- coefs[row,'Estimate'] + 1.96*coefs[row, 'Cond. SE']
+c(lower, upper)
+
+glm_t_x_rh_spatial <- spaMM::fitme(br_status ~ dbh_cm + asT * asRH + Matern(1 | lat + long), data = mod_data_tree_level, family = binomial(), nb_cores = 12)
+summary(glm_t_x_rh_spatial)
+
+glm_vpd_p_spatial <- spaMM::fitme(br_status ~ dbh_cm + asVPD + asP + Matern(1 | lat + long), data = mod_data_tree_level, family = binomial(), nb_cores = 12)
+summary(glm_vpd_p_spatial)
+
+glm_vpd_x_p_spatial <- spaMM::fitme(br_status ~ dbh_cm + asVPD * asP + Matern(1 | lat + long), data = mod_data_tree_level, family = binomial(), nb_cores = 12)
+summary(glm_vpd_p_spatial)
+```
+
+## sdmTMB
+
+``` r
+library(sdmTMB)
+library(visreg)
+
+mesh <- make_mesh(mod_data_tree_level, xy_cols = c("long", "lat"), n_knots = 100, type = "kmeans")
+
+plot(mesh)
+
+sdm_t_rh <- sdmTMB(
+    br_status ~ dbh_cm + asT + asRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_rh)
+
+sdm_t_x_rh <- sdmTMB(
+    br_status ~ dbh_cm + asT * asRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_x_rh)
+
+sdm_vpd <- sdmTMB(
+    br_status ~ dbh_cm + asVPD,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpd)
+
+sdm_vpd_p <- sdmTMB(
+    br_status ~ dbh_cm + asVPD + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpd_p)
+
+sdm_p <- sdmTMB(
+    br_status ~ dbh_cm + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_p)
+
+sdm_t_p_rh <- sdmTMB(
+    br_status ~ dbh_cm + asT + asRH + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_p_rh)
+
+
+## Second Order
+
+sdm_t_2_rh <- sdmTMB(
+    br_status ~ dbh_cm + poly(asT, 2) + asRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_rh)
+
+sdm_t_2_x_rh <- sdmTMB(
+    br_status ~ dbh_cm + poly(asT, 2) * asRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_x_rh)
+
+## sdm_t_2_x_rh_1 <- run_extra_optimization(sdm_t_2_x_rh, newton_loops = 100)
+## summary(sdm_t_2_x_rh_1)
+
+sdm_vpd_2 <- sdmTMB(
+    br_status ~ dbh_cm + poly(asVPD, 2),
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpd_2)
+
+sdm_vpd_2_p <- sdmTMB(
+    br_status ~ dbh_cm + poly(asVPD, 2) + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpd_2_p)
+
+sdm_t_2_p_rh <- sdmTMB(
+    br_status ~ dbh_cm + poly(asT, 2) + asRH + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_p_rh)
+
+
+model.sel(sdm_t_rh, sdm_t_x_rh, sdm_vpd, sdm_vpd_p, sdm_p, sdm_t_p_rh, sdm_t_2_rh, sdm_t_2_x_rh, sdm_vpd_2, sdm_vpd_2_p, sdm_t_2_p_rh)
+
+
+m1 <- sdmTMB_cv(br_status ~ 0 + dbh_cm + asT * asRH, data = mod_data_tree_level, mesh = mesh, family = binomial(link = "logit"), k_folds = 4)
+
+
+mod_data_tree_level$resids_glm <- residuals(glm_t_2_rh)
+
+qqnorm(residuals(glm_t_rh))
+qqline(residuals(glm_t_rh))
+
+ggplot(mod_data_tree_level, aes(long, lat, col = resids_glm)) +
+  scale_colour_gradient2() +
+  geom_point() +
+    coord_fixed()
+ggsave("resid_map_glm.png")
+
+mod_data_tree_level$resids <- residuals(sdm_t_2_x_rh)
+
+qqnorm(residuals(sdm_t_2_x_rh))
+qqline(residuals(sdm_t_2_x_rh))
+
+ggplot(mod_data_tree_level, aes(long, lat, col = resids)) +
+  scale_colour_gradient2() +
+  geom_point() +
+  coord_fixed()
+ggsave("resid_map_sdmTMB.png")
+
+
+visreg(sdm_t_x_rh, xvar = "dbh_cm", by = "asT", gg = TRUE, overlay = TRUE, scale = "response")
+
+visreg(sdm_t_x_rh, xvar = "asRH", by = "asT", gg = TRUE, overlay = TRUE) ## Log Scale
+
+visreg(sdm_t_x_rh, xvar = "asRH", by = "asT", gg = TRUE, overlay = TRUE, scale = "response")
+
+visreg(sdm_t_2_x_rh, xvar = "asRH", by = "asT", gg = TRUE, overlay = TRUE, scale = "response")
+
+```
 
 ## W/ Random Effects
 ### Nested transect within Park
