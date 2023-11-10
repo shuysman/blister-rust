@@ -12,7 +12,6 @@ output:
 # Load Data
 ```{r}
 library(daymetr)
-library(lubridate)
 library(tidyverse)
 library(sf)
 library(terra)
