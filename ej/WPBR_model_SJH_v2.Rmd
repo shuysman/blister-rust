@@ -125,15 +125,14 @@ mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transec
 
 ```
 
-```
-
 # A priori models
-| Variable | Description              |
-|----------|--------------------------|
-| asT      | Aug/Sep Mean Temperature |
-| asRH     | Aug/Sep Mean RH          |
-| asVPD    | Aug/Sep Sum of VPD       |
-| asP      | Aug/Sep Sum of P         |
+| Variable | Description               |
+|----------|---------------------------|
+| asT      | Aug/Sep Mean Temperature  |
+| asRH     | Aug/Sep Mean RH           |
+| asVPD    | Aug/Sep Sum of VPD        |
+| asP      | Aug/Sep Sum of P          |
+| dbh_cm   | Diameter at breast height |
 
 - Location variables?
 
@@ -145,6 +144,19 @@ cols = c("br_status", "asT", "asVPD", "asRH", "asP", "dbh_cm")
 ggpairs(mod_data_tree_level, columns = cols)
 
 ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = cols)
+
+mod_data_tree_level %>%
+    pivot_longer(cols = c(asVPD, asT, asRH, asP)) %>%
+    filter(network != "fivepks") %>%
+    ggplot(aes(x = value, y = br_status)) +
+    geom_boxplot() +
+    facet_wrap(~name, scales = "free")
+
+mod_data_tree_level %>%
+    pivot_longer(cols = c(asVPD, asT, asRH, asP)) %>%
+    ggplot(aes(x = value, y = br_status)) +
+    geom_boxplot() +
+    facet_wrap(~name, scales = "free")
 
 ```
 
@@ -191,6 +203,7 @@ ggplot(monthly_climate, mapping = aes(x = month, y = VPD, color = year, group = 
 ggplot(monthly_climate, mapping = aes(x = month, y = T, color = year, group = year)) +
     geom_line() +
     scale_x_continuous(breaks = 1:12) +
+    scale_color_viridis() +
     geom_vline(xintercept = 8) +
     geom_vline(xintercept = 10) +
     facet_wrap(~park)
@@ -198,9 +211,10 @@ ggplot(monthly_climate, mapping = aes(x = month, y = T, color = year, group = ye
 ggplot(monthly_climate, mapping = aes(x = month, y = P, color = year, group = year)) +
     geom_line() +
     scale_x_continuous(breaks = 1:12) +
+    scale_color_viridis() +
     geom_vline(xintercept = 8) +
     geom_vline(xintercept = 10) +
-    facet_wrap(~park)
+    facet_wrap(~park, scales = "free")
 ```
 
 # Model Selection
@@ -342,17 +356,17 @@ summary(glm_t_2_p_2)
 
 anova(glm_t_2_p, glm_t_2_p_2, test = "Chisq")
 
-## glm_t_2_p_rh <- glm(br_status ~ poly(asT, 2) * asRH + asP + dbh_cm,
-##                    data = mod_data_tree_level,
-##                    family = binomial
-##                  )
-## summary(glm_t_2_p_rh)
+glm_t_2_p_rh <- glm(br_status ~ poly(asT, 2) * asRH + asP + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_p_rh)
 
-## glm_p_rh <- glm(br_status ~ asP + asRH + dbh_cm,
-##                    data = mod_data_tree_level,
-##                    family = binomial
-##                  )
-## summary(glm_p_rh)
+glm_p_rh <- glm(br_status ~ asP + asRH + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_p_rh)
 
 glm_vpd_p <- glm(br_status ~ asVPD* asP + dbh_cm,
                    data = mod_data_tree_level,
@@ -374,6 +388,12 @@ glm_vpd_2_p_2 <- glm(br_status ~ poly(asVPD, 2) * poly(asP, 2) + dbh_cm,
                  )
 summary(glm_vpd_2_p_2)
 
+glm_vpd_2_p_2_rh_2 <- glm(br_status ~ poly(asVPD, 2) * poly(asP, 2) * poly(asT, 2) + dbh_cm,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_2_p_2_rh_2)
+
 anova(glm_vpd_2_p, glm_vpd_2_p_2, test = "Chisq")
 
 glm_max_vpd_2 <- glm(br_status ~ poly(max_VPD, 2) + dbh_cm,
@@ -382,10 +402,77 @@ glm_max_vpd_2 <- glm(br_status ~ poly(max_VPD, 2) + dbh_cm,
 )
 summary(glm_max_vpd_2)
 
-##model.sel(glm_t, glm_t_2, glm_rh, glm_p, glm_t_rh, glm_t_2_rh, glm_t_p, glm_t_2_p, glm_t_p_rh, glm_t_2_p_rh, glm_p_rh, glm_vpd, glm_vpd_2, glm_vpd_p, glm_vpd_2_p)
-##model.sel(glm_t_2, glm_rh_2, glm_p_2, glm_t_2_rh_2, glm_t_p, glm_t_2_p, glm_vpd_2, glm_vpd_p, glm_vpd_2_p, glm_max_vpd)
-model.sel(glm_t_2, glm_rh_2, glm_p_2, glm_t_2_rh_2, glm_t_2_p_2, glm_vpd_2, glm_vpd_2_p_2, glm_max_vpd_2)
+## model.sel(glm_t, glm_t_2, glm_rh, glm_p, glm_t_rh, glm_t_2_rh, glm_t_p, glm_t_2_p, glm_t_p_rh, glm_t_2_p_rh, glm_p_rh, glm_vpd, glm_vpd_2, glm_vpd_p, glm_vpd_2_p)
 
+## First Order models
+model.sel(glm_t,
+          glm_rh,
+          glm_p,
+          glm_t_rh,
+          glm_t_p,
+          glm_vpd,
+          glm_vpd_p,
+          glm_max_vpd)
+
+## Second Order Models
+model.sel(glm_t_2,
+          glm_rh_2,
+          glm_p_2,
+          glm_t_2_rh_2,
+          glm_t_2_p_2,
+          glm_vpd_2,
+          glm_vpd_2_p_2,
+          glm_max_vpd_2)
+
+## All Models
+model.sel(glm_t,
+          glm_rh,
+          glm_p,
+          glm_t_rh,
+          glm_t_p,
+          glm_vpd,
+          glm_vpd_p,
+          glm_max_vpd,
+          glm_t_2,
+          glm_rh_2,
+          glm_p_2,
+          glm_t_2_rh_2,
+          glm_t_p,
+          glm_t_2_p,
+          glm_vpd_2,
+          glm_vpd_2_p,
+          glm_vpd_2_p_2)
+
+
+### No P
+## First Order
+model.sel(glm_t,
+          glm_rh,
+          glm_t_rh,
+          glm_vpd,
+          glm_max_vpd)
+
+## Second Order
+model.sel(glm_t_2,
+          glm_rh_2,
+          glm_t_2_rh_2,
+          glm_vpd_2,
+          glm_max_vpd_2)
+
+## All
+model.sel(glm_t,
+          glm_rh,
+          glm_t_rh,
+          glm_vpd,
+          glm_max_vpd,
+          glm_t_2,
+          glm_rh_2,
+          glm_t_2_rh_2,
+          glm_vpd_2)
+
+```
+
+```{r, prediction-plots}
 mod_data_tree_level %>%
     select(asT) %>%
     range()
@@ -406,6 +493,7 @@ mod_data_tree_level %>%
     select(dbh_cm) %>%
     range()
 
+plot(ggpredict(glm_t_2_p_rh), facet = TRUE)
 
 plot(ggpredict(glm_t_2_p_2), facet = TRUE)
 
@@ -419,6 +507,90 @@ plot(ggpredict(glm_vpd_2_p_2, terms = c("asVPD",  "asP [5, 50, 100, 150, 190]"))
 
 plot(ggpredict(glm_vpd_2_p_2, terms = c("asP", "asVPD [45, 50, 60, 65, 70]")))
 
+
+plot(ggpredict(glm_t_rh), facet = TRUE)
+
+plot(ggpredict(glm_t_rh, terms = c("asRH", "asT [8, 10, 12, 14]")))
+
+
+plot(ggpredict(glm_t_2_rh_2), facet = TRUE)
+
+plot(ggpredict(glm_t_2_rh_2, terms = c("asRH", "asT [8, 10, 12, 14]")))
+
+
+```
+
+### Residual Plots
+
+```{r, residual-plots}
+library(car)
+
+glm_vpd_p_park <- glm(br_status ~ asVPD* asP + dbh_cm + park,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_p_park)
+
+glm_vpd_2_p_2_park <- glm(br_status ~ poly(asVPD, 2) * poly(asP, 2) + dbh_cm + park,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_vpd_2_p_2_park)
+
+residualPlots(glm_vpd_p_park, terms = ~ 1 | park)
+
+residualPlots(glm_vpd_2_p_2_park, terms = ~ 1 | park)
+
+glm_t_2_rh_2_park <- glm(br_status ~ poly(asT, 2) * poly(asRH, 2) + dbh_cm + park,
+                   data = mod_data_tree_level,
+                   family = binomial
+                 )
+summary(glm_t_2_rh_2_park)
+
+residualPlots(glm_t_2_rh_2_park, terms = ~ 1 | park)
+
+
+```
+
+### Variogram
+
+```{r variogram}
+library(gstat)
+library(sp)
+
+mod_data_spdf <- SpatialPointsDataFrame(coords = list(lon = mod_data_tree_level$long, lat = mod_data_tree_level$lat), data = mod_data_tree_level)
+
+bubble(mod_data_spdf, "asVPD")
+bubble(mod_data_spdf, "asT")
+bubble(mod_data_spdf, "asP")
+bubble(mod_data_spdf, "asRH")
+
+
+t_semivario <- variogram(asT ~ 1, data = mod_data_tree_level, locations = ~long+lat)
+plot(t_semivario)
+
+vpd_semivario <- variogram(asVPD ~ 1, data = mod_data_tree_level, locations = ~long+lat)
+plot(vpd_semivario)
+
+rh_semivario <- variogram(asRH ~ 1, data = mod_data_tree_level, locations = ~long+lat)
+plot(rh_semivario)
+
+p_semivario <- variogram(asP ~ 1, data = mod_data_tree_level, locations = ~long+lat)
+plot(p_semivario)
+```
+
+### ww
+
+``` r
+library(waywiser)
+
+gridmet_data_as_sf <- left_join(gridmet_data_as, parks, by = "transect_id") %>%
+    filter(!is.na(long) & !is.na(lat)) %>%
+    st_as_sf(coords = c("long", "lat"))
+
+ww_build_neighbors(gridmet_data_as_sf)
+
+weights <- ww_build_weights(gridmet_data_as_sf)
 ```
 
 ### Confusion Matrix
@@ -449,6 +621,12 @@ glm_p_2_train <- train(factor(br_status) ~ poly(asP, 2) + dbh_cm,
     trControl = ctrl, tuneLength = 5
 )
 
+glm_t_rh_train <- train(factor(br_status) ~ asT * asRH + dbh_cm,
+    data = mod_data_tree_level,
+    method = "glm", family = "binomial",
+    trControl = ctrl, tuneLength = 5
+    )
+
 glm_t_2_rh_2_train <- train(factor(br_status) ~ poly(asT, 2) * poly(asRH, 2) + dbh_cm,
     data = mod_data_tree_level,
     method = "glm", family = "binomial",
@@ -464,6 +642,7 @@ glm_rh_2_train <- train(factor(br_status) ~ poly(asRH, 2) + dbh_cm,
 print(glm_vpd_2_p_2_train)
 print(glm_t_2_p_2_train)
 print(glm_p_2_train)
+print(glm_t_rh_train)
 print(glm_t_2_rh_2_train)
 print(glm_rh_2_train)
 ```
@@ -816,7 +995,13 @@ glm_gye_vpd_2 <- glm(br_status ~ poly(asVPD, 2) + dbh_cm,
                  )
 summary(glm_gye_vpd_2)
 
-glm_gye_t_rh <- glm(br_status ~ asT * asRH + dbh_cm,
+glm_gye_t_rh_int <- glm(br_status ~ asT * asRH + dbh_cm,
+                   data = gye_data,
+                   family = binomial
+                 )
+summary(glm_gye_t_rh)
+
+glm_gye_t_rh <- glm(br_status ~ asT + asRH + dbh_cm,
                    data = gye_data,
                    family = binomial
                  )
@@ -842,6 +1027,7 @@ summary(glm_gye_t_2_p_rh)
 
 model.sel(glm_gye_t, glm_gye_t_2, glm_gye_rh, glm_gye_vpd, glm_gye_vpd_2, glm_gye_t_rh, glm_gye_t_2_rh, glm_gye_t_p_rh, glm_gye_t_2_p_rh)
 
+model.sel(glm_gye_t, glm_gye_rh, glm_gye_vpd, glm_gye_t_rh_int, glm_gye_t_rh)
 
 
 plot(ggpredict(glm_gye_t_2_p_rh), facet = TRUE)
