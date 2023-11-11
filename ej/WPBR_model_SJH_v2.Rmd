@@ -124,13 +124,6 @@ mod_data_tree_level <- mod_data_tree_level %>%
         log_dbh_cm = log(dbh_cm)
     )
 
-
-## %>%
-##     mutate(br_status = case_when(
-##         br_status == 1 ~ TRUE,
-##         br_status == 0 ~ FALSE
-##     ))
-
 ```
 
 # A priori models
