@@ -21,6 +21,22 @@ Tree Data:
 ./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh.csv : original from EJ with California transect_id's fixed, to use as input for cleaning script
 ./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh_clean.csv : file above with NA dbh's for california transects added in
 
+Do spatial random effects account for transect?
+https://github.com/pbs-assess/sdmTMB/discussions/192
+>My data was collected across multiple plots which are distributed across two forest complexes themselves. This means I have repeated measurements per plot and the plots are nested into a specific forest complex. With glmmTMB you can add this nested random effect as follows: (1|site/plot). Using the same syntax does not work for sdmTMB. Hence, my question: is it possible to add nested random effects to a sdmTMB model? And if so, how do you implement it?
+
+>>You should be able to do the same thing by coding your plot IDs in your
+data as unique across all sites not just within sites and then having a
+random intercept for site and a random intercept for plot.
+
+>>As a warning, if your sites are spatially arranged and you’re also
+including a spatial random field, you might struggle to estimate the model.
+One is assuming the sites are IID normally distributed and the other is
+assuming they are random fields (MVN with some covariance function).
+Theoretically you could have random site noise on top of the random field,
+but unless you have a lot of data that may be hard to estimate and you
+might want to pick one or the other.
+
 
 # Load Data
 ```{r}
