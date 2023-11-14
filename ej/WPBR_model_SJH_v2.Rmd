@@ -40,8 +40,8 @@ library(slider)
 
 crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
-## parks <- read_csv("./SITE_LOCATIONS.csv")
-parks <- read_csv("./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv")
+parks <- read_csv("./SITE_LOCATIONS.csv")
+## parks <- read_csv("./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv")
 
 ##gridmet_data_dir <- "./out/elev_corrected"
 gridmet_data_dir <- "./out/"
@@ -93,8 +93,8 @@ gridmet_data_as <- gridmet_data_annual %>%
     )
 
 
-##monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
-monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh_clean.csv") %>%
+monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
+##monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh_clean.csv") %>%
     left_join(parks, by = c("network", "transect_id")) %>%
     filter(tree_species == "PIAL" | tree_species == "PINALB") %>%
     filter(transect_id != "Butterfield") %>% ## Issue pulling gridmet data for site
