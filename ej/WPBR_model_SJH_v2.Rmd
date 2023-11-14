@@ -9,6 +9,19 @@ output:
     toc_float: true
 ---
 
+Files:
+Parks:
+./SITE_LOCATIONS.csv : Working copy of study sites, with all new data added in
+./SITE_LOCATIONS_ORIGINAL_FROM_EJ.csv : Original Data from EJ
+./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv : Original Data from EJ with "fivepks" transect names fixed - added 0 before some of the transect numbers to match new numbers received from NPS
+
+Tree Data:
+./Complete_Site_Monitoring_Dataset.csv : working copy with all new data added in
+./Complete_Site_Monitoring_Dataset_original_from_ej.csv : original from EJ
+./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh.csv : original from EJ with California transect_id's fixed, to use as input for cleaning script
+./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh_clean.csv : file above with NA dbh's for california transects added in
+
+
 # Load Data
 ```{r}
 library(daymetr)
