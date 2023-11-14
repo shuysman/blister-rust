@@ -160,7 +160,7 @@ mod_data_tree_level <- bind_cols(mod_data_tree_level, st_coordinates(mod_data_tr
 # EDA
 
 ```{r}
-cols = c("br_status", "asT", "asVPD", "asRH", "sumRH", "rollRH_max", "asP", "dbh_cm", "log_dbh_cm")
+cols = c("br_status", "asT", "asVPD", "asRH", "rollRH_max", "asP", "dbh_cm", "log_dbh_cm")
 
 ggpairs(mod_data_tree_level, columns = cols)
 
