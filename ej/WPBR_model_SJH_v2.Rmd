@@ -164,15 +164,13 @@ NA_aoi <- aoi_get(x = "North America")
 
 extent <- ext(NA_aoi)
 
-## register_stadiamaps("YOUR-API-KEY-HERE")
-
-## base_map <- get_stadiamap(bbox = c(left = -125,
-##                                     bottom = 35,
-##                                     right = -105,
-##                                     top = 55),
-##           maptype = "stamen_terrain", 
-##           crop = TRUE,
-##           zoom = 5) 
+base_map <- get_stadiamap(bbox = c(left = -125,
+                                    bottom = 35,
+                                    right = -105,
+                                    top = 55),
+          maptype = "stamen_terrain", 
+          crop = TRUE,
+          zoom = 5) 
 
 wbp_existing <- rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif")
 
@@ -207,8 +205,9 @@ ggplot() +
 ##ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
 
 
-##ggmap(base_map) +
-##    geom_sf(data = parks_sf, inherit.aes = FALSE, aes(color = park))
+ggmap(base_map) +
+    geom_sf(data = mod_data_sf, inherit.aes = FALSE, aes(color = park)) +
+    coord_sf(crs=4326, expand = FALSE)
 
 ```
 
