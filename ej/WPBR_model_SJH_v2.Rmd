@@ -938,6 +938,7 @@ summary(sdm_t_2_rh)
 
 sdm_t_2_x_rh <- sdmTMB(
     br_status ~ log_dbh_cm + poly(asT, 2) * asRH,
+##    spatial_varying = ~ 0 + asRH,
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
@@ -1015,6 +1016,7 @@ summary(sdm_t_2_p)
 
 sdm_t_2_x_p <- sdmTMB(
     br_status ~ log_dbh_cm + poly(asT, 2) * asP,
+##    spatial_varying = ~ 0 + asP,
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
