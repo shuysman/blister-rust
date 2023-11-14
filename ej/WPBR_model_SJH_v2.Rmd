@@ -41,7 +41,7 @@ library(slider)
 crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
 ## parks <- read_csv("./SITE_LOCATIONS.csv")
-parks <- read_csv("./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv") %>% filter(network != "CAN")
+parks <- read_csv("./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv")
 
 ##gridmet_data_dir <- "./out/elev_corrected"
 gridmet_data_dir <- "./out/"
@@ -108,7 +108,7 @@ mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transec
 
     ### Remove duplicate tree_id in transect.  Keep the first one found.
 mod_data_tree_level <- mod_data_tree_level %>%
-        filter(year <= 2020) %>%
+        filter(year <= 2020 | is.na(year)) %>% ### All glac network observation years are NA
 ##        filter(year >= 2003 & year <= 2020) %>%
 ##        filter(tree_status == "L") %>%
         arrange(desc(year)) %>% ### Keep transects from most recent year
