@@ -1154,10 +1154,14 @@ library(cvms)
 
 set.seed(255)
 
+clust <- sample(1:8, size = nrow(mod_data_tree_level), replace = T)
+
 sdm_cv_t_2_x_p <- sdmTMB_cv(formula(sdm_t_2_x_p),
     data = mod_data_tree_level,
     mesh = mesh,
-    family = binomial(link = "logit")
+    fold_ids = clust,
+    family = binomial(link = "logit"),
+    k_folds = length(unique(clust))
 )
 
 prediction_t_2_x_p <- sdm_cv_t_2_x_p$data %>%
@@ -1177,7 +1181,9 @@ confusion_matrix(
 sdm_cv_t_2_x_rh <- sdmTMB_cv(formula(sdm_t_2_x_rh),
     data = mod_data_tree_level,
     mesh = mesh,
-    family = binomial(link = "logit")
+    fold_ids = clust,
+    family = binomial(link = "logit"),
+    k_folds = length(unique(clust))
 )
 
 prediction_t_2_x_rh <- sdm_cv_t_2_x_rh$data %>%
@@ -1193,6 +1199,9 @@ confusion_matrix(
                           font_col_percentages = font(size = 5)) +
     theme(text = element_text(size = 20))
 
+sdm_cv_t_2_x_p$sum_loglik
+sdm_cv_t_2_x_rh$sum_loglik
 
+sdmTMB_stacking(list(sdm_cv_t_2_x_p, sdm_cv_t_2_x_rh))
 ```
 
