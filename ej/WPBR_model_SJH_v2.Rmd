@@ -780,6 +780,33 @@ plot(mesh)
 ## )
 ## plot(mesh)
 
+sdm_dbh <- sdmTMB(
+    br_status ~ log_dbh_cm,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_dbh)
+
+sdm_t <- sdmTMB(
+    br_status ~ log_dbh_cm + asT,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t)
+
+sdm_rh <- sdmTMB(
+    br_status ~ log_dbh_cm + asRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_rh)
+
 sdm_t_rh <- sdmTMB(
     br_status ~ log_dbh_cm + asT + asRH,
     data = mod_data_tree_level,
@@ -890,6 +917,15 @@ summary(sdm_p)
 
 
 ## Second Order
+
+sdm_t_2 <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asT, 2),
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2)
 
 sdm_t_2_rh <- sdmTMB(
     br_status ~ log_dbh_cm + poly(asT, 2) + asRH,
@@ -1005,28 +1041,51 @@ summary(sdm_t_2_x_p)
 ## summary(sdm_t_2_x_rh_p)
 
 
-model.sel(sdm_t_rh,
-          sdm_t_x_rh,
-          ## sdm_t_sumrh,
-          ## sdm_t_x_sumrh,
-          sdm_t_rhmax,
-          sdm_t_x_rhmax,
-          sdm_vpd,
-          sdm_vpd_p,
-          sdm_p,
-          sdm_t_2_rh,
-          sdm_t_2_x_rh,
-          ## sdm_t_2_sumrh,
-          ## sdm_t_2_x_sumrh,
-          sdm_t_2_rhmax,
-          sdm_t_2_x_rhmax,
-          sdm_vpd_2,
-          sdm_vpd_2_p,
-          sdm_t_p,
-          sdm_t_2_p,
-          sdm_t_x_p,
-          sdm_t_2_x_p)
+## All models
+(model_table <- model.sel(
+     sdm_dbh,
+     sdm_t,
+     sdm_rh,
+    sdm_t_rh,
+    sdm_t_x_rh,
+    ## sdm_t_sumrh,
+    ## sdm_t_x_sumrh,
+    sdm_t_rhmax,
+    sdm_t_x_rhmax,
+    sdm_vpd,
+    sdm_vpd_p,
+    sdm_p,
+    sdm_t_2,
+    sdm_t_2_rh,
+    sdm_t_2_x_rh,
+    ## sdm_t_2_sumrh,
+    ## sdm_t_2_x_sumrh,
+    sdm_t_2_rhmax,
+    sdm_t_2_x_rhmax,
+    sdm_vpd_2,
+    sdm_vpd_2_p,
+    sdm_t_p,
+    sdm_t_2_p,
+    sdm_t_x_p,
+    sdm_t_2_x_p
+))
 
+
+## First Order with interactions
+(model_table2 <- model.sel(
+     sdm_dbh,
+     sdm_t,
+     sdm_rh,
+    sdm_t_rh,
+    sdm_t_x_rh,
+    sdm_t_rhmax,
+    sdm_t_x_rhmax,
+    sdm_vpd,
+    sdm_vpd_p,
+    sdm_p,
+    sdm_t_p,
+    sdm_t_x_p
+ ))
 
 m1 <- sdmTMB_cv(br_status ~ 0 + dbh_cm + asT * asRH, data = mod_data_tree_level, mesh = mesh, family = binomial(link = "logit"), k_folds = 4)
 
@@ -1084,6 +1143,8 @@ mod_data_tree_level %>%
 
 ## visreg(sdm_t_2_x_rh, xvar = "asRH", by = "asT", gg = TRUE, overlay = TRUE, scale = "response")
 
+plot(ggeffect(sdm_t), facet = TRUE, add.data = TRUE)
+
 plot(ggeffect(sdm_t_x_rh), facet = TRUE, add.data = TRUE)
 
 plot(ggeffect(sdm_t_x_rh, terms = c("asT", "asRH [30, 40, 50, 60]")), add.data = TRUE)
@@ -1127,7 +1188,9 @@ plot(ggeffect(sdm_t_2_x_p, terms = c("asT", "asP[25:175 by = 50]")), add.data = 
 plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT")), add.data = TRUE)
 
 
-plot(ggeffect(sdm_vpd_2), facet = TRUE, add.data = TRUE)
+plot(ggeffect(sdm_t_rhmax), facet = TRUE, add.data = TRUE)
+
+plot(ggeffect(sdm_t_rhmax, terms = c("asT", "rollRH_max")), add.data = TRUE)
 
 
 sdmTMB_cv(formula(sdm_t_2_x_p),
@@ -1217,8 +1280,32 @@ confusion_matrix(
                           font_col_percentages = font(size = 5)) +
     theme(text = element_text(size = 20))
 
+sdm_cv_t <- sdmTMB_cv(formula(sdm_t),
+    data = mod_data_tree_level,
+    mesh = mesh,
+    fold_ids = clust,
+    family = binomial(link = "logit"),
+    k_folds = length(unique(clust))
+)
+
+prediction_t <- sdm_cv_t$data %>%
+    mutate(cv_predicted_class = if_else(cv_predicted >= 0.5, 1, 0))
+
+confusion_matrix(
+    targets = prediction_t$br_status,
+    predictions = prediction_t$cv_predicted_class
+) %>%
+    plot_confusion_matrix(
+        font_counts = font(size = 5),
+        font_normalized = font(size = 5),
+        font_row_percentages = font(size = 5),
+        font_col_percentages = font(size = 5)
+    ) +
+    theme(text = element_text(size = 20))
+
 sdm_cv_t_2_x_p$sum_loglik
 sdm_cv_t_2_x_rh$sum_loglik
+sdm_cv_t$sum_loglik
 
 sdmTMB_stacking(list(sdm_cv_t_2_x_p, sdm_cv_t_2_x_rh))
 ```
