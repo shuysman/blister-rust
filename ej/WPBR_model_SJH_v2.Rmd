@@ -683,7 +683,7 @@ library(visreg)
 ## )
 ## plot(mesh)
 
-mesh <- make_mesh(mod_data_tree_level, xy_cols = c("X", "Y"), cutoff = 5)
+mesh <- make_mesh(mod_data_tree_level, xy_cols = c("X", "Y"), cutoff = 10)
 plot(mesh)
 
 ## mesh <- make_mesh(mod_data_tree_level,
