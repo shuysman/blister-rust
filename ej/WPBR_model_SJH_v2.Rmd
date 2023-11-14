@@ -27,7 +27,8 @@ library(slider)
 
 crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
-parks <- read_csv("./SITE_LOCATIONS.csv")
+## parks <- read_csv("./SITE_LOCATIONS.csv")
+parks <- read_csv("./SITE_LOCATIONS_ORIGINAL_FROM_EJ_FIX_NAMES.csv") %>% filter(network != "CAN")
 
 ##gridmet_data_dir <- "./out/elev_corrected"
 gridmet_data_dir <- "./out/"
@@ -59,7 +60,7 @@ gridmet_data_annual <- gridmet_data %>%
         T = mean(T),
         ##T_cor = mean(T_cor),
         meanRH = mean(RH),
-        sumRH = sum(RH),
+        ## sumRH = sum(RH),
         VPD = sum(VPD),
         P = sum(P),
         rollRH_max = max(rollRH)
@@ -72,20 +73,15 @@ gridmet_data_as <- gridmet_data_annual %>%
         asT = mean(T),
         ##asT_cor = mean(T_cor),
         asRH = mean(meanRH),
-        sumRH = mean(sumRH),
+        ## sumRH = mean(sumRH),
         asVPD = mean(VPD), ## Mean annual asVPD sum
         asP = mean(P), ## Mean annual P sum
         rollRH_max = mean(rollRH_max)
-    ) %>%
-    mutate(
-        re_asT = scales::rescale(asT, newrange = c(0, 1)),
-        re_asRH = scales::rescale(asRH, newrange = c(0, 1)),
-        re_asVPD = scales::rescale(asVPD, newrange = c(0, 1)),
-        re_asP = scales::rescale(asP, newrange = c(0, 1))
     )
 
 
-monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
+##monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
+monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset_original_from_ej_add_dbh_clean.csv") %>%
     left_join(parks, by = c("network", "transect_id")) %>%
     filter(tree_species == "PIAL" | tree_species == "PINALB") %>%
     filter(transect_id != "Butterfield") %>% ## Issue pulling gridmet data for site
@@ -98,7 +94,8 @@ mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transec
     ## filter(!is.na(asT), !is.na(asRH), !is.na(asVPD)) ## filter sites with missing climate data
 
     ### Remove duplicate tree_id in transect.  Keep the first one found.
-    mod_data_tree_level <- mod_data_tree_level %>%
+mod_data_tree_level <- mod_data_tree_level %>%
+        filter(year <= 2020) %>%
 ##        filter(year >= 2003 & year <= 2020) %>%
 ##        filter(tree_status == "L") %>%
         arrange(desc(year)) %>% ### Keep transects from most recent year
@@ -673,14 +670,14 @@ library(visreg)
 ## )
 ## plot(mesh)
 
-mesh <- make_mesh(mod_data_tree_level, xy_cols = c("X", "Y"), cutoff = 10)
+mesh <- make_mesh(mod_data_tree_level, xy_cols = c("X", "Y"), cutoff = 5)
 plot(mesh)
 
 ## mesh <- make_mesh(mod_data_tree_level,
 ##                   xy_cols = c("X", "Y"),
 ##                   fmesher_func = fmesher::fm_mesh_2d_inla,
-##                   cutoff = 10,  # minimum triangle edge length
-##                   max.edge = c(50, 100), # inner and outer max triangle lengths
+##                   cutoff = 7.5,  # minimum triangle edge length
+##                   max.edge = c(75, 100), # inner and outer max triangle lengths
 ##                   offset = c(75,100) # inner and outer border widths
 ## )
 ## plot(mesh)
@@ -703,23 +700,24 @@ sdm_t_x_rh <- sdmTMB(
 )
 summary(sdm_t_x_rh)
 
-sdm_t_sumrh <- sdmTMB(
-    br_status ~ log_dbh_cm + asT + sumRH,
-    data = mod_data_tree_level,
-    family = binomial(link = "logit"),
-    mesh = mesh,
-    spatial = "on"
-)
-summary(sdm_t_sumrh)
+## sdm_t_sumrh <- sdmTMB(
+##     br_status ~ log_dbh_cm + asT + sumRH,
+##     data = mod_data_tree_level,
+##     family = binomial(link = "logit"),
+##     mesh = mesh,
+##     spatial = "on"
+## )
+## summary(sdm_t_sumrh)
 
-sdm_t_x_sumrh <- sdmTMB(
-    br_status ~ log_dbh_cm + asT * sumRH,
-    data = mod_data_tree_level,
-    family = binomial(link = "logit"),
-    mesh = mesh,
-    spatial = "on"
-)
-summary(sdm_t_rhmax)
+## sdm_t_x_sumrh <- sdmTMB(
+##     br_status ~ log_dbh_cm + asT * sumRH,
+##     data = mod_data_tree_level,
+##     family = binomial(link = "logit"),
+##     mesh = mesh,
+##     spatial = "on"
+## )
+## summary(sdm_t_x_sumrh)
+
 sdm_t_rhmax <- sdmTMB(
     br_status ~ log_dbh_cm + asT + rollRH_max,
     data = mod_data_tree_level,
@@ -813,23 +811,23 @@ sdm_t_2_x_rh <- sdmTMB(
 )
 summary(sdm_t_2_x_rh)
 
-sdm_t_2_sumrh <- sdmTMB(
-    br_status ~ log_dbh_cm + poly(asT, 2) + sumRH,
-    data = mod_data_tree_level,
-    family = binomial(link = "logit"),
-    mesh = mesh,
-    spatial = "on"
-)
-summary(sdm_t_2_sumrh)
+## sdm_t_2_sumrh <- sdmTMB(
+##     br_status ~ log_dbh_cm + poly(asT, 2) + sumRH,
+##     data = mod_data_tree_level,
+##     family = binomial(link = "logit"),
+##     mesh = mesh,
+##     spatial = "on"
+## )
+## summary(sdm_t_2_sumrh)
 
-sdm_t_2_x_sumrh <- sdmTMB(
-    br_status ~ log_dbh_cm + poly(asT, 2) * sumRH,
-    data = mod_data_tree_level,
-    family = binomial(link = "logit"),
-    mesh = mesh,
-    spatial = "on"
-)
-summary(sdm_t_2_x_sumrh)
+## sdm_t_2_x_sumrh <- sdmTMB(
+##     br_status ~ log_dbh_cm + poly(asT, 2) * sumRH,
+##     data = mod_data_tree_level,
+##     family = binomial(link = "logit"),
+##     mesh = mesh,
+##     spatial = "on"
+## )
+## summary(sdm_t_2_x_sumrh)
 
 sdm_t_2_rhmax <- sdmTMB(
     br_status ~ log_dbh_cm + poly(asT, 2) + rollRH_max,
@@ -911,8 +909,8 @@ summary(sdm_t_2_x_p)
 
 model.sel(sdm_t_rh,
           sdm_t_x_rh,
-          sdm_t_sumrh,
-          sdm_t_x_sumrh,
+          ## sdm_t_sumrh,
+          ## sdm_t_x_sumrh,
           sdm_t_rhmax,
           sdm_t_x_rhmax,
           sdm_vpd,
@@ -920,8 +918,8 @@ model.sel(sdm_t_rh,
           sdm_p,
           sdm_t_2_rh,
           sdm_t_2_x_rh,
-          sdm_t_2_sumrh,
-          sdm_t_2_x_sumrh,
+          ## sdm_t_2_sumrh,
+          ## sdm_t_2_x_sumrh,
           sdm_t_2_rhmax,
           sdm_t_2_x_rhmax,
           sdm_vpd_2,
@@ -1030,6 +1028,8 @@ plot(ggeffect(sdm_t_2_x_p, terms = c("asT", "asP[25:175 by = 50]")), add.data = 
 
 plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT")), add.data = TRUE)
 
+
+plot(ggeffect(sdm_vpd_2), facet = TRUE, add.data = TRUE)
 
 
 sdmTMB_cv(formula(sdm_t_2_x_p),
