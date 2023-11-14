@@ -671,14 +671,16 @@ cor_r
 library(gstat)
 library(sp)
 
+library(gstat)
+
 ## mod_data_spdf <- SpatialPointsDataFrame(coords = list(lon = mod_data_tree_level$X, lat = mod_data_tree_level$Y), proj4string = toString(crs_lcc), data = mod_data_tree_level)
 
 mod_data_spdf <- as(st_as_sf(mod_data_tree_level, coords = c("X", "Y"), crs = crs_lcc), "Spatial")
 
-bubble(mod_data_spdf, "asVPD")
-bubble(mod_data_spdf, "asT")
-bubble(mod_data_spdf, "asP")
-bubble(mod_data_spdf, "asRH")
+## bubble(mod_data_spdf, "asVPD")
+## bubble(mod_data_spdf, "asT")
+## bubble(mod_data_spdf, "asP")
+## bubble(mod_data_spdf, "asRH")
 
 
 t_semivario <- variogram(asT ~ 1, data = mod_data_tree_level, locations = ~X+Y)
