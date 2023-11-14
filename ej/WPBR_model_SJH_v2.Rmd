@@ -37,6 +37,7 @@ library(lme4)
 library(ggeffects)
 library(glue)
 library(slider)
+library(viridis)
 
 crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
@@ -275,6 +276,7 @@ monthly_climate <- gridmet_data %>%
 ggplot(monthly_climate, mapping = aes(x = month, y = RH, color = year, group = year)) +
     geom_line() +
     scale_x_continuous(breaks = 1:12) +
+    scale_color_viridis() +
     geom_vline(xintercept = 8) +
     geom_vline(xintercept = 10) +
     facet_wrap(~park)
@@ -282,6 +284,7 @@ ggplot(monthly_climate, mapping = aes(x = month, y = RH, color = year, group = y
 ggplot(monthly_climate, mapping = aes(x = month, y = VPD, color = year, group = year)) +
     geom_line() +
     scale_x_continuous(breaks = 1:12) +
+    scale_color_viridis() +
     geom_vline(xintercept = 8) +
     geom_vline(xintercept = 10) +
     facet_wrap(~park)
