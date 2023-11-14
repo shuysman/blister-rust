@@ -119,6 +119,9 @@ mod_data_tree_level <- mod_data_tree_level %>%
             br_status = factor(br_status)
         )
 
+mod_data_tree_level %>%
+    filter(is.na(year)) %>%
+    distinct(network, park) ## should only be GLAC
 
 mod_data_tree_level <- mod_data_tree_level %>%
 ##    left_join(gridmet_data_annual, by = "transect_id") %>%
