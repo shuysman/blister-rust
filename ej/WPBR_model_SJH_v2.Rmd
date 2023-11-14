@@ -23,6 +23,7 @@ library(GGally)
 library(lme4)
 library(ggeffects)
 library(glue)
+library(slider)
 
 crs_wgs84 <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
@@ -32,7 +33,7 @@ parks <- read_csv("./SITE_LOCATIONS.csv")
 gridmet_data_dir <- "./out/"
 
 gridmet_files <- fs::dir_ls(path = gridmet_data_dir, glob = "*.csv")
-   
+
 gridmet_data <- vroom::vroom(gridmet_files, id = "transect_id", altrep = TRUE)
 
 gridmet_data <- gridmet_data %>%
@@ -44,24 +45,37 @@ gridmet_data <- gridmet_data %>%
     mutate(transect_id = str_extract(transect_id, regex(".*/(.*)\\.csv"), group = 1)) %>%
     filter(transect_id != "Butterfield") ## Issue pulling gridmet data for site
 
-## A-S Climate
-gridmet_data_as <- gridmet_data %>%
+## Add rolling mean of RH
+gridmet_data <- gridmet_data %>%
+    arrange(Date) %>%
+    group_by(transect_id) %>%
+    mutate(rollRH = slide_dbl(RH, mean, .before = 3, .after = 3))
+
+## Annual Climate
+gridmet_data_annual <- gridmet_data %>%
     filter(month(Date) == 8 | month(Date) == 9) %>%
     group_by(transect_id, year(Date)) %>%
     summarize(
         T = mean(T),
         ##T_cor = mean(T_cor),
-        RH = mean(RH),
+        meanRH = mean(RH),
+        sumRH = sum(RH),
         VPD = sum(VPD),
-        P = sum(P)
-    ) %>% ## Annual asVPD sum
+        P = sum(P),
+        rollRH_max = max(rollRH)
+    )
+
+## A-S Climate
+gridmet_data_as <- gridmet_data_annual %>% 
     group_by(transect_id) %>%
     summarize(
         asT = mean(T),
         ##asT_cor = mean(T_cor),
-        asRH = mean(RH),
+        asRH = mean(meanRH),
+        sumRH = mean(sumRH),
         asVPD = mean(VPD), ## Mean annual asVPD sum
-        asP = mean(P) ## Mean annual P sum
+        asP = mean(P), ## Mean annual P sum
+        rollRH_max = mean(rollRH_max)
     ) %>%
     mutate(
         re_asT = scales::rescale(asT, newrange = c(0, 1)),
@@ -82,8 +96,6 @@ monitoring_data <- read_csv("./Complete_Site_Monitoring_Dataset.csv") %>%
 
 mod_data_tree_level <- left_join(monitoring_data, gridmet_data_as, by = "transect_id")
     ## filter(!is.na(asT), !is.na(asRH), !is.na(asVPD)) ## filter sites with missing climate data
-
-
 
     ### Remove duplicate tree_id in transect.  Keep the first one found.
     mod_data_tree_level <- mod_data_tree_level %>%
@@ -138,7 +150,7 @@ mod_data_tree_level <- bind_cols(mod_data_tree_level, st_coordinates(mod_data_tr
 # EDA
 
 ```{r}
-cols = c("br_status", "asT", "asVPD", "asRH", "asP", "dbh_cm", "log_dbh_cm")
+cols = c("br_status", "asT", "asVPD", "asRH", "sumRH", "rollRH_max", "asP", "dbh_cm", "log_dbh_cm")
 
 ggpairs(mod_data_tree_level, columns = cols)
 
@@ -691,6 +703,41 @@ sdm_t_x_rh <- sdmTMB(
 )
 summary(sdm_t_x_rh)
 
+sdm_t_sumrh <- sdmTMB(
+    br_status ~ log_dbh_cm + asT + sumRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_sumrh)
+
+sdm_t_x_sumrh <- sdmTMB(
+    br_status ~ log_dbh_cm + asT * sumRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_rhmax)
+sdm_t_rhmax <- sdmTMB(
+    br_status ~ log_dbh_cm + asT + rollRH_max,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_rhmax)
+
+sdm_t_x_rhmax <- sdmTMB(
+    br_status ~ log_dbh_cm + asT * rollRH_max,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_x_rhmax)
+
 sdm_t_p <- sdmTMB(
     br_status ~ log_dbh_cm + asT + asP,
     data = mod_data_tree_level,
@@ -766,6 +813,43 @@ sdm_t_2_x_rh <- sdmTMB(
 )
 summary(sdm_t_2_x_rh)
 
+sdm_t_2_sumrh <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asT, 2) + sumRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_sumrh)
+
+sdm_t_2_x_sumrh <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asT, 2) * sumRH,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_x_sumrh)
+
+sdm_t_2_rhmax <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asT, 2) + rollRH_max,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_rhmax)
+
+sdm_t_2_x_rhmax <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asT, 2) * rollRH_max,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_t_2_x_rhmax)
+
+
 ## sdm_t_2_x_rh_1 <- run_extra_optimization(sdm_t_2_x_rh, newton_loops = 100)
 ## summary(sdm_t_2_x_rh_1)
 
@@ -825,7 +909,27 @@ summary(sdm_t_2_x_p)
 ## summary(sdm_t_2_x_rh_p)
 
 
-model.sel(sdm_t_rh, sdm_t_x_rh, sdm_vpd, sdm_vpd_p, sdm_p, sdm_t_2_rh, sdm_t_2_x_rh, sdm_vpd_2, sdm_vpd_2_p, sdm_t_p, sdm_t_2_p, sdm_t_x_p, sdm_t_2_x_p)
+model.sel(sdm_t_rh,
+          sdm_t_x_rh,
+          sdm_t_sumrh,
+          sdm_t_x_sumrh,
+          sdm_t_rhmax,
+          sdm_t_x_rhmax,
+          sdm_vpd,
+          sdm_vpd_p,
+          sdm_p,
+          sdm_t_2_rh,
+          sdm_t_2_x_rh,
+          sdm_t_2_sumrh,
+          sdm_t_2_x_sumrh,
+          sdm_t_2_rhmax,
+          sdm_t_2_x_rhmax,
+          sdm_vpd_2,
+          sdm_vpd_2_p,
+          sdm_t_p,
+          sdm_t_2_p,
+          sdm_t_x_p,
+          sdm_t_2_x_p)
 
 
 m1 <- sdmTMB_cv(br_status ~ 0 + dbh_cm + asT * asRH, data = mod_data_tree_level, mesh = mesh, family = binomial(link = "logit"), k_folds = 4)
@@ -970,28 +1074,45 @@ library(cvms)
 
 set.seed(255)
 
-smp_size <- floor(0.85 * nrow(mod_data_tree_level))
-
-train_ind <- sample(seq_len(nrow(mod_data_tree_level)), size = smp_size)
-
-train <- mod_data_tree_level[train_ind, ]
-test <- mod_data_tree_level[-train_ind, ]
-
-
-sdm_cv <- sdmTMB_cv(formula(sdm_t_2_x_p),
+sdm_cv_t_2_x_p <- sdmTMB_cv(formula(sdm_t_2_x_p),
     data = mod_data_tree_level,
     mesh = mesh,
     family = binomial(link = "logit")
 )
 
-prediction <- sdm_cv$data %>%
+prediction_t_2_x_p <- sdm_cv_t_2_x_p$data %>%
     mutate(cv_predicted_class = if_else(cv_predicted >= 0.5, 1, 0))
 
 confusion_matrix(
-    targets = prediction$br_status,
-    predictions = prediction$cv_predicted_class
+    targets = prediction_t_2_x_p$br_status,
+    predictions = prediction_t_2_x_p$cv_predicted_class
 ) %>%
-    plot_confusion_matrix()
+    plot_confusion_matrix(font_counts = font(size = 5),
+                          font_normalized = font(size = 5),
+                          font_row_percentages = font(size = 5),
+                          font_col_percentages = font(size = 5)) +
+    theme(text = element_text(size = 20))
+
+
+sdm_cv_t_2_x_rh <- sdmTMB_cv(formula(sdm_t_2_x_rh),
+    data = mod_data_tree_level,
+    mesh = mesh,
+    family = binomial(link = "logit")
+)
+
+prediction_t_2_x_rh <- sdm_cv_t_2_x_rh$data %>%
+    mutate(cv_predicted_class = if_else(cv_predicted >= 0.5, 1, 0))
+
+confusion_matrix(
+    targets = prediction_t_2_x_rh$br_status,
+    predictions = prediction_t_2_x_rh$cv_predicted_class
+) %>%
+    plot_confusion_matrix(font_counts = font(size = 5),
+                          font_normalized = font(size = 5),
+                          font_row_percentages = font(size = 5),
+                          font_col_percentages = font(size = 5)) +
+    theme(text = element_text(size = 20))
+
 
 ```
 
