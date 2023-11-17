@@ -172,53 +172,63 @@ mod_data_tree_level <- bind_cols(mod_data_tree_level, st_coordinates(mod_data_tr
 ```{r map}
 ## extent <- ext(parks_sf)
 library(AOI)
-library(ggmap)
-library(maps)
+library(maptiles)
 library(tidyterra)
 
-NA_aoi <- aoi_get(x = "North America")
+## NA_aoi <- aoi_get(x = "North America")
 
-extent <- ext(NA_aoi)
+## extent <- ext(NA_aoi)
 
-base_map <- get_stadiamap(bbox = c(left = -125,
-                                    bottom = 35,
-                                    right = -105,
-                                    top = 55),
-          maptype = "stamen_terrain", 
-          crop = TRUE,
-          zoom = 5) 
+## base_map <- get_stadiamap(bbox = c(left = -125,
+##                                     bottom = 35,
+##                                     right = -105,
+##                                     top = 55),
+##           maptype = "stamen_terrain", 
+##           crop = TRUE,
+##           zoom = 5) 
+
 
 wbp_existing <- rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif")
 
-mod_data_sf <- st_as_sf(mod_data_tree_level, crs = crs(crs_lcc))
+mod_data_sf <- st_as_sf(mod_data_tree_level, crs = crs(crs_lcc)) %>% st_transform(crs("EPSG:3857"))
+
+base_map <- get_tiles(mod_data_sf, provider = "Esri.WorldTopoMap", crop = TRUE, zoom = 5)
+
+## ggplot() +
+##     geom_polygon(data = map_data("state"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
+##     geom_polygon(data = map_data("world", "Canada"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
+##     geom_spatraster(data = wbp_existing, mapping = aes(fill = wbp_existing), na.rm = TRUE, alpha = 0.3) +
+##     scale_fill_continuous(name = "WBP Range", na.value = NA) +
+##     geom_sf(data = mod_data_sf, aes(color = park), inherit.aes = FALSE) +
+##     labs(color = "Parks") +
+##     coord_sf(xlim = c(-125, -105), ylim = c(35, 55), crs = 4326) +
+##     ggtitle("Whitebark WPBR Monitoring Sites") +
+##     theme_bw(base_size = 16) +
+##     scale_x_continuous(labels = function(x) paste0(x, '\u00B0', "W")) +
+##     scale_y_continuous(labels = function(x) paste0(x, '\u00B0', "N")) +
+##     ggspatial::annotation_scale(
+##                    location = "tr",
+##                    bar_cols = c("grey60", "white"),
+##                    text_family = "ArcherPro Book"
+##                ) +
+##     ggspatial::annotation_north_arrow(
+##                    location = "tr", which_north = "true",
+##                    pad_x = unit(0.4, "in"), pad_y = unit(0.4, "in"),
+##                    style = ggspatial::north_arrow_nautical(
+##                                           fill = c("grey40", "white"),
+##                                           line_col = "grey20",
+##                                           text_family = "ArcherPro Book"
+##                                       )
+##                )
+##ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
 
 ggplot() +
-    geom_polygon(data = map_data("state"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
-    geom_polygon(data = map_data("world", "Canada"), aes(long, lat, group = group), color = "black", fill = "white", inherit.aes = FALSE) +
-    geom_spatraster(data = wbp_existing, mapping = aes(fill = wbp_existing), na.rm = TRUE, alpha = 0.3) +
-    scale_fill_continuous(name = "WBP Range", na.value = NA) +
+    geom_spatraster_rgb(data = base_map) +
     geom_sf(data = mod_data_sf, aes(color = park), inherit.aes = FALSE) +
-    labs(color = "Parks") +
-    coord_sf(xlim = c(-125, -105), ylim = c(35, 55), crs = 4326) +
-    ggtitle("Whitebark WPBR Monitoring Sites") +
-    theme_bw(base_size = 16) +
-    scale_x_continuous(labels = function(x) paste0(x, '\u00B0', "W")) +
-    scale_y_continuous(labels = function(x) paste0(x, '\u00B0', "N")) +
-    ggspatial::annotation_scale(
-                   location = "tr",
-                   bar_cols = c("grey60", "white"),
-                   text_family = "ArcherPro Book"
-               ) +
-    ggspatial::annotation_north_arrow(
-                   location = "tr", which_north = "true",
-                   pad_x = unit(0.4, "in"), pad_y = unit(0.4, "in"),
-                   style = ggspatial::north_arrow_nautical(
-                                          fill = c("grey40", "white"),
-                                          line_col = "grey20",
-                                          text_family = "ArcherPro Book"
-                                      )
-               )
-##ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
+    ggtitle("WPBR Probability of Infection, 33cm DBH, CanESM2 rcp45 2071-2090") +
+    labs(fill = "P(infection)") +
+    scale_x_continuous(labels = function(x) paste0(x)) +
+    scale_y_continuous(labels = function(x) paste0(x))
 
 
 ggmap(base_map) +
