@@ -1144,8 +1144,6 @@ summary(sdm_t_2_x_p)
     sdm_t_x_p
  ))
 
-m1 <- sdmTMB_cv(br_status ~ 0 + dbh_cm + asT * asRH, data = mod_data_tree_level, mesh = mesh, family = binomial(link = "logit"), k_folds = 4)
-
 
 glm_t_2_x_p <- glm(br_status ~ poly(asT, 2) * asP, data = mod_data_tree_level, family = binomial(link = "logit"))
 
@@ -1173,7 +1171,7 @@ ggplot(mod_data_tree_level, aes(X, Y, col = resids_glmer)) +
   scale_colour_gradient2() +
   geom_point() +
     coord_fixed()
-ggsave("resid_map_glm.png")
+ggsave("resid_map_glmer.png")
 
 mod_data_tree_level$resids <- residuals(sdm_t_2_x_p)
 
@@ -1181,10 +1179,11 @@ qqnorm(residuals(sdm_t_2_x_p))
 qqline(residuals(sdm_t_2_x_p))
 
 ggplot(mod_data_tree_level, aes(X, Y, col = resids)) +
-  scale_colour_gradient2() +
-  geom_point() +
-  coord_fixed()
-ggsave("resid_map_sdmTMB.png")
+    scale_colour_gradient2() +
+    geom_point() +
+    ##coord_fixed() +
+    facet_wrap(~park, scales = "free")
+##ggsave("resid_map_sdmTMB.png")
 
 
 mod_data_tree_level %>%
@@ -1242,7 +1241,7 @@ plot(ggeffect(sdm_t_2_x_p), facet = TRUE, add.data = TRUE)
 
 plot(ggeffect(sdm_t_2_x_p, terms = c("asT", "asP[25:175 by = 50]")), add.data = TRUE)
 
-plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT")), add.data = TRUE)
+plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT [8:14 by=1]")), add.data = TRUE)
 
 
 plot(ggeffect(sdm_t_rhmax), facet = TRUE, add.data = TRUE)
