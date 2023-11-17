@@ -91,9 +91,13 @@ gridmet_data_annual <- gridmet_data %>%
         ##T_cor = mean(T_cor),
         meanRH = mean(RH),
         ## sumRH = sum(RH),
-        VPD = sum(VPD),
+        meanVPD = mean(VPD),
+        ##sumVPD = sum(VPD),
+        maxVPD = max(VPD),
+        minVPD = min(VPD),
         P = sum(P),
-        rollRH_max = max(rollRH)
+        rollRH_max = max(rollRH),
+        rollRH_min = min(rollRH)
     )
 
 ## A-S Climate
@@ -104,7 +108,9 @@ gridmet_data_as <- gridmet_data_annual %>%
         ##asT_cor = mean(T_cor),
         asRH = mean(meanRH),
         ## sumRH = mean(sumRH),
-        asVPD = mean(VPD), ## Mean annual asVPD sum
+        asVPDmean = mean(meanVPD), ## Mean annual asVPD sum
+        asVPDmax = mean(maxVPD),
+        asVPDmin = mean(minVPD),
         asP = mean(P), ## Mean annual P sum
         rollRH_max = mean(rollRH_max)
     )
@@ -889,23 +895,41 @@ sdm_t_x_p <- sdmTMB(
 )
 summary(sdm_t_x_p)
 
-sdm_vpd <- sdmTMB(
-    br_status ~ log_dbh_cm + asVPD,
+sdm_vpdmean <- sdmTMB(
+    br_status ~ log_dbh_cm + asVPDmean,
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
     spatial = "on"
 )
-summary(sdm_vpd)
+summary(sdm_vpdmean)
 
-sdm_vpd_p <- sdmTMB(
-    br_status ~ log_dbh_cm + asVPD + asP,
+sdm_vpdmean_p <- sdmTMB(
+    br_status ~ log_dbh_cm + asVPDmean + asP,
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
     spatial = "on"
 )
-summary(sdm_vpd_p)
+summary(sdm_vpdmean_p)
+
+sdm_vpdmax <- sdmTMB(
+    br_status ~ log_dbh_cm + asVPDmax,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpdmax)
+
+sdm_vpdmax_p <- sdmTMB(
+    br_status ~ log_dbh_cm + asVPDmax + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpdmax_p)
 
 sdm_p <- sdmTMB(
     br_status ~ log_dbh_cm + asP,
@@ -996,24 +1020,41 @@ summary(sdm_t_2_x_rhmax)
 ## sdm_t_2_x_rh_1 <- run_extra_optimization(sdm_t_2_x_rh, newton_loops = 100)
 ## summary(sdm_t_2_x_rh_1)
 
-sdm_vpd_2 <- sdmTMB(
-    br_status ~ log_dbh_cm + poly(asVPD, 2),
+sdm_vpdmean_2 <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asVPDmean, 2),
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
     spatial = "on"
 )
-summary(sdm_vpd_2)
+summary(sdm_vpdmean_2)
 
-sdm_vpd_2_p <- sdmTMB(
-    br_status ~ log_dbh_cm + poly(asVPD, 2) + asP,
+sdm_vpdmean_2_p <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asVPDmean, 2) + asP,
     data = mod_data_tree_level,
     family = binomial(link = "logit"),
     mesh = mesh,
     spatial = "on"
 )
-summary(sdm_vpd_2_p)
+summary(sdm_vpdmean_2_p)
 
+sdm_vpdmax_2 <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asVPDmax, 2),
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpdmax_2)
+
+sdm_vpdmax_2_p <- sdmTMB(
+    br_status ~ log_dbh_cm + poly(asVPDmax, 2) + asP,
+    data = mod_data_tree_level,
+    family = binomial(link = "logit"),
+    mesh = mesh,
+    spatial = "on"
+)
+summary(sdm_vpdmax_2_p)
 
 sdm_t_2_p <- sdmTMB(
     br_status ~ log_dbh_cm + poly(asT, 2) + asP,
@@ -1064,8 +1105,10 @@ summary(sdm_t_2_x_p)
     ## sdm_t_x_sumrh,
     sdm_t_rhmax,
     sdm_t_x_rhmax,
-    sdm_vpd,
-    sdm_vpd_p,
+    sdm_vpdmean,
+    sdm_vpdmean_p,
+    sdm_vpdmax,
+    sdm_vpdmax_p,
     sdm_p,
     sdm_t_2,
     sdm_t_2_rh,
@@ -1074,8 +1117,10 @@ summary(sdm_t_2_x_p)
     ## sdm_t_2_x_sumrh,
     sdm_t_2_rhmax,
     sdm_t_2_x_rhmax,
-    sdm_vpd_2,
-    sdm_vpd_2_p,
+    sdm_vpdmean_2,
+    sdm_vpdmax_2,
+    sdm_vpdmean_2_p,
+    sdm_vpdmax_2_p,
     sdm_t_p,
     sdm_t_2_p,
     sdm_t_x_p,
