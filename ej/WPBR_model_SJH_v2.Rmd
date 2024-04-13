@@ -288,6 +288,8 @@ cols = c("br_status", "asT", "asVPDmean", "asRH", "asP", "dbh_cm", "log_dbh_cm")
 
 ggpairs(mod_data_tree_level, columns = cols)
 
+##ggsave("Report/pairs.png", width = 6, height = 6)
+
 ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = cols)
 
 mod_data_tree_level %>%
@@ -1264,11 +1266,22 @@ plot(ggeffect(sdm_t_x_p), facet = TRUE, add.data = TRUE)
 
 plot(ggeffect(sdm_t_x_p, terms = c("asT", "asP[25:175 by = 50]")), add.data = TRUE)
 
-plot(ggeffect(sdm_t_2_x_p), facet = TRUE, add.data = TRUE)
+plot(ggeffect(sdm_t_2_x_p), facet = TRUE, add.data = TRUE, ci = FALSE) + xlab("") + ylab("P(Infection)")
 
 plot(ggeffect(sdm_t_2_x_p, terms = c("asT", "asP[25:175 by = 50]")), add.data = TRUE)
 
-plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT [8:14 by=1]")), add.data = TRUE)
+
+df <- ggeffect(sdm_t_2_x_p, terms = c("asP", "asT [8:14 by=2]"))
+
+ggplot(df, aes(x, predicted, colour = group)) + 
+    geom_line() +
+    facet_wrap(~group) +
+    ylim(0, 1)
+
+pr <- ggpredict(sdm_t_2_x_p, c("asP", "asT"))
+
+
+plot(ggeffect(sdm_t_2_x_p, terms = c("asP", "asT [8:14 by=2]")), add.data = TRUE, ci = FALSE) + ggtitle("Temperature x Precipitation Interaction") + xlab("Aug/Sep Precipitation") + ylab("P(Infection)") + labs(color = "Aug/Sep Temperature") + theme(legend.position = "bottom")
 
 
 plot(ggeffect(sdm_t_rhmax), facet = TRUE, add.data = TRUE)
