@@ -292,6 +292,9 @@ ggpairs(mod_data_tree_level, columns = cols)
 
 ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = cols)
 
+
+## "Fivepeaks" network seems to be overcontributing to some variables compared to other monitoring locations
+## There is spatial autocorrelation in the data?
 mod_data_tree_level %>%
     pivot_longer(cols = c(asVPDmean, asT, asRH, asP)) %>%
     filter(network != "fivepks") %>%
