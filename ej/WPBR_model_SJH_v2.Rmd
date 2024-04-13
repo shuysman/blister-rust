@@ -180,6 +180,7 @@ mod_data_tree_level <- bind_cols(mod_data_tree_level, st_coordinates(mod_data_tr
 library(AOI)
 library(maptiles)
 library(tidyterra)
+library(ggnewscale)
 
 ## NA_aoi <- aoi_get(x = "North America")
 
@@ -189,12 +190,15 @@ library(tidyterra)
 ##                                     bottom = 35,
 ##                                     right = -105,
 ##                                     top = 55),
-##           maptype = "stamen_terrain", 
+##           maptype = "stamen_terrain",
 ##           crop = TRUE,
-##           zoom = 5) 
+##           zoom = 5)
 
 
-wbp_existing <- rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif")
+wbp_existing <- rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif") %>% subst(from = 0, to = NA)
+
+wbp_existing_poly <- terra::as.polygons(wbp_existing)
+
 
 mod_data_sf <- st_as_sf(mod_data_tree_level, crs = crs(crs_lcc)) %>% st_transform(crs("EPSG:3857"))
 
@@ -226,10 +230,10 @@ base_map <- get_tiles(mod_data_sf, provider = "Esri.WorldTopoMap", crop = TRUE, 
 ##                                           text_family = "ArcherPro Book"
 ##                                       )
 ##                )
-##ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
+## ggsave(file.path(ccrp_presentation_dir, "wpbr_map.png"), width = 8, height = 8, type = "cairo")
 
 ggplot() +
-    geom_spatraster_rgb(data = base_map) +
+    geom_spatraster_rgb(data = base_map, interpolate = TRUE) +
     geom_sf(data = mod_data_sf, aes(color = park), inherit.aes = FALSE) +
     ggtitle("WPBR Probability of Infection, 33cm DBH, CanESM2 rcp45 2071-2090") +
     labs(fill = "P(infection)") +
@@ -237,9 +241,32 @@ ggplot() +
     scale_y_continuous(labels = function(x) paste0(x))
 
 
-ggmap(base_map) +
-    geom_sf(data = mod_data_sf, inherit.aes = FALSE, aes(color = park)) +
-    coord_sf(crs=4326, expand = FALSE)
+## ggmap(base_map) +
+##     geom_sf(data = mod_data_sf, inherit.aes = FALSE, aes(color = park)) +
+##     coord_sf(crs=4326, expand = FALSE)
+
+
+### all pooints
+
+parks_sf <- st_as_sf(parks %>% filter(!is.na(lat), !is.na(long), park != "CAN", park != "GRBA", park != "ROMO", park != "GRSA"), coords = c("long", "lat"), crs = crs("EPSG:4326")) %>% st_transform(crs("EPSG:3857"))
+
+aoi <- parks_sf %>% vect %>% buffer(width = 100000)
+
+wbp_existing_poly_3857 <- wbp_existing_poly %>% project(crs("EPSG:3857")) %>% crop(parks_sf)
+
+base_map <- get_tiles(aoi, provider = "Esri.WorldStreetMap", crop = TRUE, zoom = 5)
+
+ggplot() +
+    geom_spatraster_rgb(data = base_map, maxcell = Inf, interpolate = TRUE) +
+    geom_sf(data = wbp_existing_poly_3857, alpha = 0.5, fill = "darkgray", inherit.aes = FALSE) +
+    geom_sf(data = parks_sf, aes(color = park), size = 1, inherit.aes = FALSE) +
+    coord_sf(crs = 3857) +
+    ggtitle("PIAL WPBR Monitoring Transects") +
+    labs(color = "Park") +
+    scale_x_continuous(labels = function(x) paste0(x)) +
+    scale_y_continuous(labels = function(x) paste0(x))
+##ggsave("wpbr_map.png", width = 8, height = 8)
+
 
 ```
 
