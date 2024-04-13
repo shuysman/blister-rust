@@ -284,21 +284,21 @@ ggplot() +
 # EDA
 
 ```{r}
-cols = c("br_status", "asT", "asVPD", "asRH", "rollRH_max", "asP", "dbh_cm", "log_dbh_cm")
+cols = c("br_status", "asT", "asVPDmean", "asRH", "asP", "dbh_cm", "log_dbh_cm")
 
 ggpairs(mod_data_tree_level, columns = cols)
 
 ggpairs(mod_data_tree_level, mapping = aes(color = park), columns = cols)
 
 mod_data_tree_level %>%
-    pivot_longer(cols = c(asVPD, asT, asRH, asP)) %>%
+    pivot_longer(cols = c(asVPDmean, asT, asRH, asP)) %>%
     filter(network != "fivepks") %>%
     ggplot(aes(x = value, y = br_status)) +
     geom_boxplot() +
     facet_wrap(~name, scales = "free")
 
 mod_data_tree_level %>%
-    pivot_longer(cols = c(asVPD, asT, asRH, asP)) %>%
+    pivot_longer(cols = c(asVPDmean, asT, asRH, asP)) %>%
     ggplot(aes(x = value, y = br_status)) +
     geom_boxplot() +
     facet_wrap(~name, scales = "free")
@@ -368,7 +368,7 @@ ggplot(monthly_climate, mapping = aes(x = month, y = P, color = year, group = ye
 
 ## Test for Covariance
 ```{r}
-glmer_all <- glmer(br_status ~ asT + asVPD + asRH + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
+glmer_all <- glmer(br_status ~ asT + asVPDmean + asRH + asP + dbh_cm + (1 | park) + (1 | park:transect_id),
                    data = mod_data_tree_level,
                    family = binomial
 )
@@ -385,7 +385,7 @@ cor_table %>%
 abs(cor_table) > 0.7
 
 library(corrplot)
-corrplot(cor(select(mod_data_tree_level, asT, asVPD, asP, asRH, dbh_cm)), method = "number", type = "upper")
+corrplot(cor(select(mod_data_tree_level, asT, asVPDmean, asP, asRH, dbh_cm)), method = "number", type = "upper")
 
 corrplot(cor(select(mod_data_tree_level, max_T, min_T, max_P, min_P, max_VPD, min_VPD, max_RH, min_RH, dbh_cm)), method = "number", type = "upper")
 
@@ -729,7 +729,7 @@ mod_data_spdf <- as(st_as_sf(mod_data_tree_level, coords = c("X", "Y"), crs = cr
 t_semivario <- variogram(asT ~ 1, data = mod_data_tree_level, locations = ~X+Y)
 plot(t_semivario)
 
-vpd_semivario <- variogram(asVPD ~ 1, data = mod_data_tree_level, locations = ~X+Y)
+vpd_semivario <- variogram(asVPDmean ~ 1, data = mod_data_tree_level, locations = ~X+Y)
 plot(vpd_semivario)
 
 rh_semivario <- variogram(asRH ~ 1, data = mod_data_tree_level, locations = ~X+Y)
