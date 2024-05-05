@@ -1,0 +1,275 @@
+``` r
+library(terra)
+library(sdmTMB)
+library(tidyverse)
+library(glue)
+library(tidyterra)
+library(pbmcapply)
+
+sdm_model <- readRDS("sdm_t_2_x_p.RDS")
+
+maca_dir <- "/media/smithers/shuysman/data/MACA/wbp_range/monthly/"
+
+out_dir <- "/media/smithers/shuysman/data/out/blister/sdm_v2/"
+
+models <- c("NorESM1-M", "MRI-CGCM3", "MIROC-ESM-CHEM", "MIROC5", "IPSL-CM5A-LR", "inmcm4", "HadGEM2-CC365", "CSIRO-Mk3-6-0", "CNRM-CM5", "CanESM2", "BNU-ESM", "GFDL-ESM2G")
+### CCSM4 tmmn data missing
+##models <- c("NorESM1-M")
+scenarios <- c('rcp85', 'rcp45')
+##scenarios <- c("rcp45")
+
+current <- seq(2010, 2025)
+near <- seq(2026, 2050)
+mid <- seq(2051, 2075)
+end <- seq(2076, 2099)
+
+##log_dbh <- c(-2, -1, 0, 1, 2, 3.5, 4)
+
+log_dbh <- log(c(1,5,10,20,40,80)) %>% round(1)
+
+crs_lcc <- "+proj=lcc +lon_0=-117 +lat_1=36 +lat_2=49 +units=km"
+
+wbp_existing <- project(rast("/home/steve/OneDrive/whitebark/data/existing/wbp_existing.tif"), crs(crs_lcc))
+
+wbp_existing <- wbp_existing == 1
+
+process_gcm <- function(options) {
+    model <- options$model
+    scenario <- options$scenario
+    pred_range <- options$pred_range
+    log_dbh <- options$log_dbh
+
+    out_file <- file.path(out_dir, glue("{model}_{scenario}_{head(pred_range, 1)}-{tail(pred_range, 1)}_{log_dbh}-logdbh_brinfpr.nc"))
+    if (file.exists(out_file)) {
+        next
+    }
+    
+    tmin_filename <- paste0(maca_dir, "tmmn_", model, "_", scenario, "_2006-2099_monthly_gye.nc")
+    tmin <- rast(tmin_filename) %>%
+        subset(month(time(.)) == 8 | month(time(.)) == 9) %>%
+        subset(year(time(.)) %in% pred_range)
+    tmax_filename <- paste0(maca_dir, "tmmx_", model, "_", scenario, "_2006-2099_monthly_gye.nc")
+    tmax <- rast(tmax_filename) %>%
+        subset(month(time(.)) == 8 | month(time(.)) == 9) %>%
+        subset(year(time(.)) %in% pred_range)
+
+    pr_filename <- paste0(maca_dir, "pr_", model, "_", scenario, "_2006-2099_monthly_gye.nc")
+    pr <- rast(pr_filename) %>%
+        subset(month(time(.)) == 8 | month(time(.)) == 9) %>%
+        subset(year(time(.)) %in% pred_range)
+
+    tminmax <- c(tmin, tmax)
+    tavg <- tapp(tminmax, fun = mean, index = "years")
+    names(tavg) <- rep("asT", nlyr(tavg))
+    tavg <- tavg - 273.15 ## convert K to C
+
+    tavg_global <- mean(tavg)
+    names(tavg_global) <- "asT"
+
+    pr_sum <- tapp(pr, fun = sum, index = "years")
+    names(pr_sum) <- rep("asP", nlyr(pr_sum))
+
+    pr_global <- mean(pr_sum)
+    names(pr_global) <- "asP"
+
+    as_t_p <- c(tavg_global, pr_global)
+
+    as_t_p_lcc <- project(as_t_p, crs(crs_lcc))
+    
+    as_t_p_lcc_df <- as.data.frame(as_t_p_lcc, xy = TRUE, na.rm = TRUE) %>%
+        rename(X = x, Y = y)
+
+    as_t_p_lcc_df$log_dbh_cm = log_dbh
+
+    predicted <- predict(sdm_model,
+                         as_t_p_lcc_df,
+                         type = "response"
+                         )
+
+    p_rast <- rast(predicted)
+
+    crs(p_rast) <- crs(crs_lcc)
+
+    writeCDF(p_rast,
+             filename = out_file,
+             split = TRUE
+             ## varname = glue("{pred_range[1]}-{pred_range[2]}_brinfpr"),
+             ## longname = glue("{pred_range[1]}-{pred_range[2]} Probability of Blister Rust infection")
+             ) 
+}
+
+
+options <- expand.grid(model = models, scenario = scenarios, pred_range = list(current, near, mid, end), log_dbh = log_dbh) %>%
+    t() %>%
+    data.frame()  ### How to use (mc)lapply with expand.grid https://gist.github.com/ihrke/c54e8d7c82cd91ae51d1d62f8d29b936
+
+pbmclapply(options, 
+         FUN = process_gcm,
+         mc.cores = parallel::detectCores() - 4)
+
+
+
+
+
+## p_rast <- rast(predicted)
+
+p_rast <- rast(file.path(out_dir, "CanESM2_rcp45_2071-2090_3.5-logdbh_brinfpr.nc")) ## Testing
+
+p_rast_df <- as.data.frame(p_rast, xy = TRUE) %>%
+    rename(X = x, Y = y)
+
+crs(p_rast) <- crs(crs_lcc)
+
+p_rast_cropped <- crop(p_rast, wbp_existing)
+
+wbp_cropped <- resample(wbp_existing, p_rast_cropped) %>%
+    subst(0, NA)
+
+p_wbp <- mask(p_rast_cropped, wbp_cropped)
+
+plot(wbp_existing)
+
+plot(p_wbp)
+
+plot(p_wbp$est)
+
+p_wbp_df <- as.data.frame(p_wbp, xy = TRUE) %>%
+    rename(X = x, Y = y)
+
+p_wbp_df$exp_non_rf <- exp(p_wbp_df$est_non_rf)
+p_wbp_df$exp_rf <- exp(p_wbp_df$est_rf)
+
+p_wbp_df2 <- p_wbp_df %>% filter(exp_non_rf <= 5)
+
+plot_map <- function(dat, column = est) {
+    ggplot(dat, aes(X, Y, fill = {{ column }})) +
+        geom_raster() +
+        coord_fixed() ##+
+        ##geom_spatraster(data = wbp_existing, mapping = aes(fill = wbp_existing), na.rm = TRUE, alpha = 0.3)
+}
+
+plot_map(p_rast_df, est) +
+  scale_fill_viridis_c() +
+  ggtitle("Prediction (fixed effects + all random effects)")
+
+plot_map(p_rast_df, est_non_rf) +
+  ggtitle("Prediction (fixed effects)") +
+  scale_fill_viridis_c()
+
+plot_map(p_rast_df, est_rf) +
+  ggtitle("All random field estimates") +
+    scale_fill_gradient2()
+
+plot_map(p_wbp_df, est) +
+  scale_fill_viridis_c() +
+  ggtitle("Prediction (fixed effects + all random effects)")
+
+plot_map(p_wbp_df2, exp_non_rf) +
+  ggtitle("Prediction (fixed effects)") +
+  scale_fill_viridis_c()
+
+plot_map(p_wbp_df2, exp_rf) +
+  ggtitle("All random field estimates") +
+  scale_fill_gradient2()
+
+plot_map(p_wbp_df, omega_s) +
+  ggtitle("Spatial random effects only") +
+  scale_fill_gradient2()
+
+
+
+zoom(p_wbp$est, e = draw())
+
+zoom(p_wbp$est_non_rf, e = draw())
+
+mid_hazard <- p_wbp$est <= .25
+
+low_hazard <- p_wbp$est <= .10
+
+plot(mid_hazard)
+
+plot(low_hazard)
+
+total_area <- expanse(wbp_cropped)$area
+
+low_hazard_area <- expanse(low_hazard, byValue = TRUE)
+low_hazard_area <- low_hazard_area[low_hazard_area$value == 1, ]$area
+
+low_hazard_pct <- low_hazard_area / total_area
+
+mid_hazard_area <- expanse(mid_hazard, byValue = TRUE)
+mid_hazard_area <- mid_hazard_area[mid_hazard_area$value == 1, ]$area
+
+mid_hazard_pct <- mid_hazard_area / total_area
+
+```
+
+
+``` r
+## library(ggmap)
+library(maptiles)
+library(tidyterra)
+
+gye_boundary <- st_read("/home/steve/OneDrive/whitebark/gyeboundary/GYE_boundary_dd.shp", quiet = TRUE)
+## extent <- ext(gye_boundary)
+
+p_wbp_4326 <- project(p_wbp, crs("EPSG:4326")) %>% terra::trim(padding = 1)
+
+p_wbp_4326_df <- as.data.frame(p_wbp_4326, xy = TRUE)
+
+p_wbp_3857 <- project(p_wbp, crs("EPSG:3857")) %>% terra::trim(padding = 1)
+
+
+
+plot(p_wbp_4326)
+
+extent <- ext(p_wbp_3857) 
+
+## base_map <- get_stadiamap(bbox = c(left = extent[1][[1]],
+##                                     bottom = extent[3][[1]],
+##                                     right = extent[2][[1]],
+##                                     top = extent[4][[1]]),
+##           maptype = "outdoors", 
+##           crop = TRUE,
+##           zoom = 6)
+
+
+base_map <- get_tiles(p_wbp_3857, provider = "Esri.WorldTopoMap", crop = TRUE, zoom = 6)
+
+## ggmap(base_map, maprange = TRUE) +
+##     coord_cartesian() +
+##     ##    geom_sf(data = gye_boundary, inherit.aes = FALSE, fill = NA, lwd = 1.5) +
+##     ##    geom_sf(data = wbp_existing_poly_gye, inherit.aes = FALSE, fill = NA, lwd = .5, color = "gray30") +
+##     geom_raster(data = p_wbp_4326$est, aes(x = x, y = y), alpha = 0.6, inherit.aes = FALSE) +
+##     scale_fill_viridis(na.value = NA) +
+##     ggtitle(glue("Probability of WPBR Infection 33cm DBH, CanESM2 rcp45 2071-2090"))
+
+##   scale_x_continuous(labels = function(x) paste0(x, '\u00B0', "W")) +
+##   scale_y_continuous(labels = function(x) paste0(x, '\u00B0', "N"))
+
+ggplot() +
+    geom_spatraster_rgb(data = base_map) +
+    geom_spatraster(data = p_wbp_3857$est, inherit.aes = FALSE, alpha = 0.65) +
+    scale_fill_viridis(na.value = NA) +
+    ggtitle("WPBR Probability of Infection, 33cm DBH, CanESM2 rcp45 2071-2090") +
+    labs(fill = "P(infection)") +
+    scale_x_continuous(labels = function(x) paste0(x)) +
+    scale_y_continuous(labels = function(x) paste0(x))
+ggsave("~/OneDrive/whitebark/wpef-presentation/img/wpbr_map.png")
+
+
+p_wbp_3857_gye <- crop(p_wbp_3857, gye_boundary %>% st_transform(crs(p_wbp_3857)))
+
+base_map_gye <- get_tiles(p_wbp_3857_gye, provider = "Esri.WorldTopoMap", crop = TRUE, zoom = 7)
+
+ggplot() +
+    geom_spatraster_rgb(data = base_map_gye) +
+    geom_spatraster(data = p_wbp_3857_gye$est, inherit.aes = FALSE, alpha = 0.65) +
+    scale_fill_viridis(na.value = NA) +
+    ggtitle("GYE WPBR P(Infection), 33cm DBH, CanESM2 rcp45 2071-2090") +
+    labs(fill = "P(infection)") +
+    scale_x_continuous(labels = function(x) paste0(x)) +
+    scale_y_continuous(labels = function(x) paste0(x))
+ggsave("~/OneDrive/whitebark/wpef-presentation/img/wpbr_map_gye.png")
+
+```
