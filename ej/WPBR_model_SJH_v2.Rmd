@@ -172,6 +172,17 @@ mod_data_tree_level <- bind_cols(mod_data_tree_level, st_coordinates(mod_data_tr
 
 ```
 
+# Describe Data
+
+``` r
+## Number of trees included for each "park"
+monitoring_data %>%
+    group_by(park) %>%
+    distinct(tree_id, park) %>%
+    summarize(n_trees = n()) %>%
+    knitr::kable()
+
+```
 
 # Map
 
@@ -678,13 +689,13 @@ plot(ggpredict(glm_t_2_rh_2, terms = c("asRH", "asT [8, 10, 12, 14]")))
 ```{r, residual-plots}
 library(car)
 
-glm_vpd_p_park <- glm(br_status ~ asVPD* asP + dbh_cm + park,
+glm_vpd_p_park <- glm(br_status ~ asVPDmean* asP + dbh_cm + park,
                    data = mod_data_tree_level,
                    family = binomial
                  )
 summary(glm_vpd_p_park)
 
-glm_vpd_2_p_2_park <- glm(br_status ~ poly(asVPD, 2) * poly(asP, 2) + dbh_cm + park,
+glm_vpd_2_p_2_park <- glm(br_status ~ poly(asVPDmean, 2) * poly(asP, 2) + dbh_cm + park,
                    data = mod_data_tree_level,
                    family = binomial
                  )
@@ -719,8 +730,6 @@ cor_r
 library(gstat)
 library(sp)
 
-library(gstat)
-
 ## mod_data_spdf <- SpatialPointsDataFrame(coords = list(lon = mod_data_tree_level$X, lat = mod_data_tree_level$Y), proj4string = toString(crs_lcc), data = mod_data_tree_level)
 
 mod_data_spdf <- as(st_as_sf(mod_data_tree_level, coords = c("X", "Y"), crs = crs_lcc), "Spatial")
@@ -730,18 +739,26 @@ mod_data_spdf <- as(st_as_sf(mod_data_tree_level, coords = c("X", "Y"), crs = cr
 ## bubble(mod_data_spdf, "asP")
 ## bubble(mod_data_spdf, "asRH")
 
-
 t_semivario <- variogram(asT ~ 1, data = mod_data_tree_level, locations = ~X+Y)
-plot(t_semivario)
+png("Report/t_semivario.png")
+plot(t_semivario, main = "Temperature Variogram")
+dev.off()
 
 vpd_semivario <- variogram(asVPDmean ~ 1, data = mod_data_tree_level, locations = ~X+Y)
-plot(vpd_semivario)
+png("Report/vpd_semivario.png")
+plot(vpd_semivario, main = "VPD Variogram")
+dev.off()
 
 rh_semivario <- variogram(asRH ~ 1, data = mod_data_tree_level, locations = ~X+Y)
-plot(rh_semivario)
+png("Report/rh_semivario.png")
+plot(rh_semivario, main = "RH Variogram")
+dev.off()
 
 p_semivario <- variogram(asP ~ 1, data = mod_data_tree_level, locations = ~X+Y)
-plot(p_semivario)
+png("Report/p_semivario.png")
+plot(p_semivario, main = "Precipitation Variogram")
+dev.off()
+
 ```
 
 ### Confusion Matrix
@@ -818,6 +835,22 @@ library(visreg)
 
 mesh <- make_mesh(mod_data_tree_level, xy_cols = c("X", "Y"), cutoff = 10)
 plot(mesh)
+
+png("Report/mesh.png")
+plot(mesh)
+dev.off()
+
+## ggplot() +
+##     #geom_spatraster_rgb(data = base_map, maxcell = Inf, interpolate = TRUE) +
+##     #geom_sf(data = wbp_existing_poly_3857, alpha = 0.5, fill = "darkgray", inherit.aes = FALSE) +
+##     #geom_sf(data = parks_sf, aes(color = park), size = 1, inherit.aes = FALSE) +
+##     inlabru::gg(mesh$mesh, crs = sf::st_crs(3857)) +
+##     coord_sf(crs = 3857) +
+##     ggtitle("PIAL WPBR Monitoring Transects") +
+##     labs(color = "Park") +
+##     scale_x_continuous(labels = function(x) paste0(x)) +
+##     scale_y_continuous(labels = function(x) paste0(x))
+
 
 ## mesh <- make_mesh(mod_data_tree_level,
 ##                   xy_cols = c("X", "Y"),
@@ -1356,6 +1389,7 @@ confusion_matrix(
                           font_row_percentages = font(size = 5),
                           font_col_percentages = font(size = 5)) +
     theme(text = element_text(size = 20))
+ggsave("Report/t_2_x_p_confusion_matrix.png")
 
 
 sdm_cv_t_2_x_rh <- sdmTMB_cv(formula(sdm_t_2_x_rh),
